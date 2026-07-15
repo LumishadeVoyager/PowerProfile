@@ -456,6 +456,82 @@ function Format-Freq {
     return "{0:F1}GHz" -f ($Mhz / 1000.0)
 }
 
+function New-Preset {
+    param([string]$Text, [double]$Value)
+    return [PSCustomObject]@{ Text = $Text; Value = $Value }
+}
+
+function New-PresetCombo {
+    param(
+        [object[]]$Options,
+        [double]$CurrentValue,
+        [int]$Width = 300
+    )
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.DropDownStyle = 'DropDownList'
+    $combo.DisplayMember = 'Text'
+    $combo.ValueMember = 'Value'
+    $combo.Size = New-Object System.Drawing.Size $Width, 28
+    $combo.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
+
+    $selectedIndex = -1
+    foreach ($opt in $Options) {
+        [void]$combo.Items.Add($opt)
+        if ([Math]::Abs(([double]$opt.Value) - $CurrentValue) -lt 0.001) {
+            $selectedIndex = $combo.Items.Count - 1
+        }
+    }
+
+    if ($selectedIndex -lt 0) {
+        $customText = "当前自定义: $CurrentValue"
+        if ($CurrentValue -eq 0) {
+            $customText = '当前自定义: 无上限'
+        }
+        [void]$combo.Items.Add((New-Preset $customText $CurrentValue))
+        $selectedIndex = $combo.Items.Count - 1
+    }
+    $combo.SelectedIndex = $selectedIndex
+    return $combo
+}
+
+function Get-PresetValue {
+    param([System.Windows.Forms.ComboBox]$Combo)
+    if ($Combo.SelectedItem -and ($Combo.SelectedItem.PSObject.Properties.Name -contains 'Value')) {
+        return [double]$Combo.SelectedItem.Value
+    }
+    return 0
+}
+
+function Get-FrequencyPresets {
+    param([string]$ModeKey)
+    switch ($ModeKey) {
+        'Idle' {
+            return @(
+                (New-Preset '极静音: 1.6GHz' 1600),
+                (New-Preset '安静推荐: 2.0GHz' 2000),
+                (New-Preset '轻办公: 2.2GHz' 2200),
+                (New-Preset '更稳压: 1.8GHz' 1800)
+            )
+        }
+        'Balanced' {
+            return @(
+                (New-Preset '日常推荐: 3.0GHz' 3000),
+                (New-Preset '省电办公: 2.6GHz' 2600),
+                (New-Preset '积极响应: 3.5GHz' 3500),
+                (New-Preset '不限频率' 0)
+            )
+        }
+        'Game' {
+            return @(
+                (New-Preset '满血无上限' 0),
+                (New-Preset '稳定高性能: 4.5GHz' 4500),
+                (New-Preset '温控优先: 4.0GHz' 4000),
+                (New-Preset '保守游戏: 3.6GHz' 3600)
+            )
+        }
+    }
+}
+
 # === 状态读取 + Worker 调用 ===================================================
 function Get-CurrentMode {
     if (Test-Path $StatePath) {
@@ -481,29 +557,49 @@ function Show-Settings {
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size 510, 768
+    $form.ClientSize = New-Object System.Drawing.Size 560, 690
     $form.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
     $form.TopMost = $true
+    $form.BackColor = [System.Drawing.Color]::FromArgb(247, 248, 250)
 
     $work = Read-Settings
     $controls = @{}
+    $tip = New-Object System.Windows.Forms.ToolTip
+    $tip.AutoPopDelay = 7000
+    $tip.InitialDelay = 350
+    $tip.ReshowDelay = 120
 
-    $y = 12
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = 'PowerProfile 设置'
+    $title.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 16, ([System.Drawing.FontStyle]::Bold)
+    $title.Location = New-Object System.Drawing.Point 18, 14
+    $title.Size = New-Object System.Drawing.Size 260, 32
+    $form.Controls.Add($title)
+
+    $subtitle = New-Object System.Windows.Forms.Label
+    $subtitle.Text = '模式频率与自动策略'
+    $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(96, 103, 112)
+    $subtitle.Location = New-Object System.Drawing.Point 20, 48
+    $subtitle.Size = New-Object System.Drawing.Size 260, 22
+    $form.Controls.Add($subtitle)
+
+    $y = 82
     foreach ($modeKey in 'Idle','Balanced','Game') {
         $color = $ModeColors[$modeKey]
         $modeData = $work.modes[$modeKey]
 
         $grp = New-Object System.Windows.Forms.GroupBox
-        $grp.Text = "  $modeKey 模式  "
+        $grp.Text = "  $modeKey  "
         $grp.ForeColor = $color
         $grp.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 10, ([System.Drawing.FontStyle]::Bold)
-        $grp.Location = New-Object System.Drawing.Point 12, $y
-        $grp.Size = New-Object System.Drawing.Size 480, 150
+        $grp.Location = New-Object System.Drawing.Point 18, $y
+        $grp.Size = New-Object System.Drawing.Size 524, 96
+        $grp.BackColor = [System.Drawing.Color]::White
         $form.Controls.Add($grp)
 
         $lblName = New-Object System.Windows.Forms.Label
         $lblName.Text = '模式名称:'
-        $lblName.Location = New-Object System.Drawing.Point 14, 28
+        $lblName.Location = New-Object System.Drawing.Point 18, 28
         $lblName.Size = New-Object System.Drawing.Size 72, 22
         $lblName.ForeColor = [System.Drawing.SystemColors]::ControlText
         $lblName.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
@@ -511,172 +607,128 @@ function Show-Settings {
 
         $tbName = New-Object System.Windows.Forms.TextBox
         $tbName.Text = $modeData.name
-        $tbName.Location = New-Object System.Drawing.Point 90, 26
-        $tbName.Size = New-Object System.Drawing.Size 160, 22
+        $tbName.Location = New-Object System.Drawing.Point 92, 25
+        $tbName.Size = New-Object System.Drawing.Size 150, 26
         $tbName.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
         $grp.Controls.Add($tbName)
 
         $lblFreq = New-Object System.Windows.Forms.Label
-        $lblFreq.Text = '频率上限:'
-        $lblFreq.Location = New-Object System.Drawing.Point 14, 66
+        $lblFreq.Text = '频率挡位:'
+        $lblFreq.Location = New-Object System.Drawing.Point 18, 62
         $lblFreq.Size = New-Object System.Drawing.Size 72, 22
         $lblFreq.ForeColor = [System.Drawing.SystemColors]::ControlText
         $lblFreq.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
         $grp.Controls.Add($lblFreq)
 
-        $lblFreqVal = New-Object System.Windows.Forms.Label
-        $lblFreqVal.Text = Format-Freq $modeData.freqMax
-        $lblFreqVal.Location = New-Object System.Drawing.Point 90, 62
-        $lblFreqVal.Size = New-Object System.Drawing.Size 130, 28
-        $lblFreqVal.Font = New-Object System.Drawing.Font 'Consolas', 13, ([System.Drawing.FontStyle]::Bold)
-        $lblFreqVal.ForeColor = $color
-        $grp.Controls.Add($lblFreqVal)
+        $freqCombo = New-PresetCombo -Options (Get-FrequencyPresets $modeKey) -CurrentValue ([double]$modeData.freqMax) -Width 250
+        $freqCombo.Location = New-Object System.Drawing.Point 92, 58
+        $grp.Controls.Add($freqCombo)
+        $tip.SetToolTip($freqCombo, '选择一个预设频率上限。无上限会交给 Windows/HWP 满血调度。')
 
-        $chkNoLimit = New-Object System.Windows.Forms.CheckBox
-        $chkNoLimit.Text = '无上限 (满 Turbo)'
-        $chkNoLimit.Location = New-Object System.Drawing.Point 235, 64
-        $chkNoLimit.Size = New-Object System.Drawing.Size 145, 22
-        $chkNoLimit.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
-        $chkNoLimit.Checked = ($modeData.freqMax -eq 0)
-        $grp.Controls.Add($chkNoLimit)
-
-        $slider = New-Object System.Windows.Forms.TrackBar
-        $slider.Minimum = 8
-        $slider.Maximum = 50
-        $slider.TickFrequency = 2
-        $slider.SmallChange = 1
-        $slider.LargeChange = 5
-        $slider.Location = New-Object System.Drawing.Point 14, 95
-        $slider.Size = New-Object System.Drawing.Size 450, 45
-        if ($modeData.freqMax -eq 0) {
-            $slider.Value = 49
-            $slider.Enabled = $false
-        } else {
-            $slider.Value = [Math]::Max(8, [Math]::Min(50, [int]($modeData.freqMax / 100)))
-        }
-        $grp.Controls.Add($slider)
-
-        $slider.Add_ValueChanged({
-            $val = $this.Value * 100
-            foreach ($c in $this.Parent.Controls) {
-                if ($c -is [System.Windows.Forms.Label] -and $c.Font.Name -eq 'Consolas') {
-                    $c.Text = "{0:F1}GHz" -f ($val / 1000.0)
+        $lblCurrent = New-Object System.Windows.Forms.Label
+        $lblCurrent.Text = "当前: $(Format-Freq $modeData.freqMax)"
+        $lblCurrent.Location = New-Object System.Drawing.Point 360, 59
+        $lblCurrent.Size = New-Object System.Drawing.Size 140, 24
+        $lblCurrent.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
+        $lblCurrent.ForeColor = [System.Drawing.Color]::FromArgb(96, 103, 112)
+        $grp.Controls.Add($lblCurrent)
+        $freqCombo.Add_SelectedIndexChanged({
+            param($sender, $e)
+            $value = [int](Get-PresetValue $sender)
+            foreach ($c in $sender.Parent.Controls) {
+                if ($c -is [System.Windows.Forms.Label] -and $c.Text.StartsWith('当前:')) {
+                    $c.Text = "当前: $(Format-Freq $value)"
                 }
-            }
-        })
-        $chkNoLimit.Add_CheckedChanged({
-            $isChk = $this.Checked
-            $tb = $null; $lbl = $null
-            foreach ($c in $this.Parent.Controls) {
-                if ($c -is [System.Windows.Forms.TrackBar]) { $tb = $c }
-                if ($c -is [System.Windows.Forms.Label] -and $c.Font.Name -eq 'Consolas') { $lbl = $c }
-            }
-            if ($tb) { $tb.Enabled = -not $isChk }
-            if ($lbl) {
-                if ($isChk) { $lbl.Text = '无上限' }
-                else { $lbl.Text = "{0:F1}GHz" -f (($tb.Value * 100) / 1000.0) }
             }
         })
 
         $controls[$modeKey] = @{
             NameBox = $tbName
-            Slider = $slider
-            NoLimit = $chkNoLimit
+            FreqCombo = $freqCombo
         }
-        $y += 160
+        $y += 106
     }
 
     $grpOther = New-Object System.Windows.Forms.GroupBox
     $grpOther.Text = '  其他设置  '
     $grpOther.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 10, ([System.Drawing.FontStyle]::Bold)
-    $grpOther.Location = New-Object System.Drawing.Point 12, $y
-    $grpOther.Size = New-Object System.Drawing.Size 480, 180
+    $grpOther.Location = New-Object System.Drawing.Point 18, $y
+    $grpOther.Size = New-Object System.Drawing.Size 524, 218
+    $grpOther.BackColor = [System.Drawing.Color]::White
     $form.Controls.Add($grpOther)
 
-    $lblAuto = New-Object System.Windows.Forms.Label
-    $lblAuto.Text = '自动检测间隔 (秒):'
-    $lblAuto.Location = New-Object System.Drawing.Point 14, 28
-    $lblAuto.Size = New-Object System.Drawing.Size 170, 22
-    $grpOther.Controls.Add($lblAuto)
-    $numAuto = New-Object System.Windows.Forms.NumericUpDown
-    $numAuto.Minimum = 5; $numAuto.Maximum = 120; $numAuto.Value = $work.autoIntervalSec
-    $numAuto.Location = New-Object System.Drawing.Point 190, 26
-    $numAuto.Size = New-Object System.Drawing.Size 80, 22
-    $grpOther.Controls.Add($numAuto)
+    $autoOptions = @(
+        (New-Preset '灵敏: 每 5 秒检测' 5),
+        (New-Preset '推荐: 每 15 秒检测' 15),
+        (New-Preset '省电: 每 30 秒检测' 30),
+        (New-Preset '保守: 每 60 秒检测' 60)
+    )
+    $idleOptions = @(
+        (New-Preset '灵敏: 60 秒无人操作' 60),
+        (New-Preset '推荐: 90 秒无人操作' 90),
+        (New-Preset '稳定: 3 分钟无人操作' 180),
+        (New-Preset '保守: 5 分钟无人操作' 300)
+    )
+    $toastOptions = @(
+        (New-Preset '短提示: 1.0 秒' 1.0),
+        (New-Preset '推荐: 1.2 秒' 1.2),
+        (New-Preset '清楚: 2.0 秒' 2.0),
+        (New-Preset '慢速: 3.0 秒' 3.0)
+    )
+    $unlockOptions = @(
+        (New-Preset '快速恢复: 5 分钟' 5),
+        (New-Preset '推荐: 10 分钟' 10),
+        (New-Preset '稳定: 20 分钟' 20),
+        (New-Preset '保守: 45 分钟' 45)
+    )
+    $exitOptions = @(
+        (New-Preset '灵敏: 3 次无游戏' 3),
+        (New-Preset '推荐: 6 次无游戏' 6),
+        (New-Preset '稳定: 10 次无游戏' 10),
+        (New-Preset '保守: 15 次无游戏' 15)
+    )
 
-    $lblIdle = New-Object System.Windows.Forms.Label
-    $lblIdle.Text = '人离开判定 (秒):'
-    $lblIdle.Location = New-Object System.Drawing.Point 14, 58
-    $lblIdle.Size = New-Object System.Drawing.Size 170, 22
-    $grpOther.Controls.Add($lblIdle)
-    $numIdle = New-Object System.Windows.Forms.NumericUpDown
-    $numIdle.Minimum = 30; $numIdle.Maximum = 600; $numIdle.Value = $work.userIdleSec
-    $numIdle.Location = New-Object System.Drawing.Point 190, 56
-    $numIdle.Size = New-Object System.Drawing.Size 80, 22
-    $grpOther.Controls.Add($numIdle)
+    function Add-SettingRow {
+        param(
+            [System.Windows.Forms.Control]$Parent,
+            [string]$Label,
+            [object[]]$Options,
+            [double]$CurrentValue,
+            [int]$X,
+            [int]$Y,
+            [string]$Tooltip
+        )
+        $lbl = New-Object System.Windows.Forms.Label
+        $lbl.Text = $Label
+        $lbl.Location = New-Object System.Drawing.Point $X, $Y
+        $lbl.Size = New-Object System.Drawing.Size 120, 22
+        $lbl.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
+        $Parent.Controls.Add($lbl)
 
-    $lblToast = New-Object System.Windows.Forms.Label
-    $lblToast.Text = 'Toast 停留时长 (秒):'
-    $lblToast.Location = New-Object System.Drawing.Point 14, 88
-    $lblToast.Size = New-Object System.Drawing.Size 170, 22
-    $grpOther.Controls.Add($lblToast)
-    $numToast = New-Object System.Windows.Forms.NumericUpDown
-    $numToast.Minimum = [decimal]0.5; $numToast.Maximum = [decimal]5.0
-    $numToast.DecimalPlaces = 1; $numToast.Increment = [decimal]0.1
-    $numToast.Value = [decimal]$work.toastStaySec
-    $numToast.Location = New-Object System.Drawing.Point 190, 86
-    $numToast.Size = New-Object System.Drawing.Size 80, 22
-    $grpOther.Controls.Add($numToast)
+        $combo = New-PresetCombo -Options $Options -CurrentValue $CurrentValue -Width 350
+        $combo.Location = New-Object System.Drawing.Point ($X + 128), ($Y - 3)
+        $Parent.Controls.Add($combo)
+        $tip.SetToolTip($combo, $Tooltip)
+        return $combo
+    }
 
-    # 手动锁定后多少分钟无操作 -> 恢复 Auto
-    $lblUnlock = New-Object System.Windows.Forms.Label
-    $lblUnlock.Text = '手动锁定空闲超时 (分):'
-    $lblUnlock.Location = New-Object System.Drawing.Point 14, 118
-    $lblUnlock.Size = New-Object System.Drawing.Size 170, 22
-    $grpOther.Controls.Add($lblUnlock)
-    $numUnlock = New-Object System.Windows.Forms.NumericUpDown
-    $numUnlock.Minimum = 1; $numUnlock.Maximum = 120
-    $numUnlock.Value = $work.manualUnlockMinutes
-    $numUnlock.Location = New-Object System.Drawing.Point 190, 116
-    $numUnlock.Size = New-Object System.Drawing.Size 80, 22
-    $grpOther.Controls.Add($numUnlock)
-    $lblUnlockHint = New-Object System.Windows.Forms.Label
-    $lblUnlockHint.Text = '(手动模式 X 分钟无操作即自动恢复 Auto)'
-    $lblUnlockHint.Location = New-Object System.Drawing.Point 280, 118
-    $lblUnlockHint.Size = New-Object System.Drawing.Size 200, 22
-    $lblUnlockHint.ForeColor = [System.Drawing.Color]::Gray
-    $grpOther.Controls.Add($lblUnlockHint)
+    $cmbAuto = Add-SettingRow $grpOther '检测频率' $autoOptions ([double]$work.autoIntervalSec) 20 36 '越灵敏越快响应, 也会更频繁采样。'
+    $cmbIdle = Add-SettingRow $grpOther '人离开判定' $idleOptions ([double]$work.userIdleSec) 20 70 '空闲超过这个挡位且低负载时保持静音。'
+    $cmbToast = Add-SettingRow $grpOther '提示停留' $toastOptions ([double]$work.toastStaySec) 20 104 '托盘提示停留时间。'
+    $cmbUnlock = Add-SettingRow $grpOther '恢复 Auto' $unlockOptions ([double]$work.manualUnlockMinutes) 20 138 '手动锁定后空闲多久自动恢复 Auto。'
+    $cmbExit = Add-SettingRow $grpOther '退出防抖' $exitOptions ([double]$work.gameExitMissCount) 20 172 '游戏结束后连续多少次无游戏才切回静音。'
 
-    # 游戏退出防抖: 连续 N 次无游戏才切回 Idle (防过场动画/Alt-Tab 反复横跳)
-    $lblExit = New-Object System.Windows.Forms.Label
-    $lblExit.Text = '游戏退出防抖 (次):'
-    $lblExit.Location = New-Object System.Drawing.Point 14, 148
-    $lblExit.Size = New-Object System.Drawing.Size 170, 22
-    $grpOther.Controls.Add($lblExit)
-    $numExit = New-Object System.Windows.Forms.NumericUpDown
-    $numExit.Minimum = 2; $numExit.Maximum = 30
-    $numExit.Value = $work.gameExitMissCount
-    $numExit.Location = New-Object System.Drawing.Point 190, 146
-    $numExit.Size = New-Object System.Drawing.Size 80, 22
-    $grpOther.Controls.Add($numExit)
-    $lblExitHint = New-Object System.Windows.Forms.Label
-    $lblExitHint.Text = '(连续 N 次检测无游戏才切 Idle, 高=更稳定)'
-    $lblExitHint.Location = New-Object System.Drawing.Point 280, 148
-    $lblExitHint.Size = New-Object System.Drawing.Size 215, 22
-    $lblExitHint.ForeColor = [System.Drawing.Color]::Gray
-    $grpOther.Controls.Add($lblExitHint)
-
-    $y += 190
+    $y += 230
 
     $btnReset = New-Object System.Windows.Forms.Button
     $btnReset.Text = '恢复默认'
-    $btnReset.Location = New-Object System.Drawing.Point 12, $y
+    $btnReset.Location = New-Object System.Drawing.Point 18, $y
     $btnReset.Size = New-Object System.Drawing.Size 100, 32
     $form.Controls.Add($btnReset)
 
     $btnSave = New-Object System.Windows.Forms.Button
     $btnSave.Text = '保存'
-    $btnSave.Location = New-Object System.Drawing.Point 280, $y
+    $btnSave.Location = New-Object System.Drawing.Point 326, $y
     $btnSave.Size = New-Object System.Drawing.Size 100, 32
     $btnSave.BackColor = [System.Drawing.Color]::FromArgb(33, 150, 243)
     $btnSave.ForeColor = [System.Drawing.Color]::White
@@ -686,7 +738,7 @@ function Show-Settings {
 
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text = '取消'
-    $btnCancel.Location = New-Object System.Drawing.Point 392, $y
+    $btnCancel.Location = New-Object System.Drawing.Point 438, $y
     $btnCancel.Size = New-Object System.Drawing.Size 100, 32
     $form.Controls.Add($btnCancel)
     $form.CancelButton = $btnCancel
@@ -703,18 +755,14 @@ function Show-Settings {
                 $name = $controls[$k].NameBox.Text.Trim()
                 if (-not $name) { $name = $k }
                 $work.modes[$k].name = $name
-                if ($controls[$k].NoLimit.Checked) {
-                    $work.modes[$k].freqMax = 0
-                } else {
-                    $work.modes[$k].freqMax = $controls[$k].Slider.Value * 100
-                }
+                $work.modes[$k].freqMax = [int](Get-PresetValue $controls[$k].FreqCombo)
                 Add-Content -Path $diag -Value ("  $k => name=$name freq=$($work.modes[$k].freqMax)") -Encoding UTF8
             }
-            $work.autoIntervalSec = [int]$numAuto.Value
-            $work.userIdleSec = [int]$numIdle.Value
-            $work.toastStaySec = [double]$numToast.Value
-            $work.manualUnlockMinutes = [int]$numUnlock.Value
-            $work.gameExitMissCount = [int]$numExit.Value
+            $work.autoIntervalSec = [int](Get-PresetValue $cmbAuto)
+            $work.userIdleSec = [int](Get-PresetValue $cmbIdle)
+            $work.toastStaySec = [double](Get-PresetValue $cmbToast)
+            $work.manualUnlockMinutes = [int](Get-PresetValue $cmbUnlock)
+            $work.gameExitMissCount = [int](Get-PresetValue $cmbExit)
             Save-Settings -Settings $work
             Add-Content -Path $diag -Value "  Save-Settings 已调用 -> $SettingsPath" -Encoding UTF8
             Add-Content -Path $diag -Value ("  文件存在? " + (Test-Path $SettingsPath)) -Encoding UTF8
