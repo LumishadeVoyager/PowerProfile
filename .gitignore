@@ -1,0 +1,4 @@
+*.log
+current_mode.txt
+auto_enabled.txt
+game_miss_count.txt
