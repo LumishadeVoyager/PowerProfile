@@ -40,13 +40,15 @@ E:\PowerProfile\
 
 ### 自动模式 (默认)
 
-每 60 秒检测一次系统状态:
-- 检测到游戏进程或 GPU 占用 >30% → 自动切 **Game** 模式
-- 游戏退出 → 自动切回 **Idle** 模式 (只在之前是 Game 时切回)
+按设置里的间隔检测系统状态:
+- 锁屏/刚开机未进入桌面时强制保持 **Idle** 模式
+- 检测到全屏 3D 且存在真实 CPU/GPU 负载, 或后台持续高负载 → 自动切 **Game** 模式
+- 游戏退出后连续多次检测不到游戏 → 自动切回 **Idle** 模式
+- 每次真正切换都会在 `profile.log` 记录原因, 包括前台 exe、top CPU/GPU 进程和负载数据
 
 ### 手动切换
 
-- **左键单击托盘图标** → 立刻 Auto 检测
+- **左键单击托盘图标** → 开启/关闭 Auto 检测
 - **右键单击托盘图标** → 弹出菜单, 选具体模式
 - **双击托盘图标** → 打开切换日志
 
@@ -61,15 +63,15 @@ powershell -File E:\PowerProfile\PowerProfile.ps1 -Mode Auto
 
 ## 自动检测识别什么游戏?
 
-`PowerProfile.ps1` 里的 `$gameKeywords` 数组定义:
+检测不再依赖游戏进程白名单, 而是组合这些信号:
 
-- Steam, Epic, GOG, Battle.net 启动器
-- 主流游戏: CS2, Valorant, LOL, Dota2, R6, 原神, PUBG, GTA, Cyberpunk, Witcher, Elden Ring, Sekiro, Minecraft 等
-- Unreal/Unity 引擎进程
-- 路径含 `steamapps\common\`, `Epic Games\`, `GOG Games\` 的进程
-- GPU 3D 引擎占用 > 30%
+- 前台窗口是否全屏
+- 前台进程是否加载 D3D/DXGI/Vulkan/OpenGL 模块
+- GPU 3D、总 CPU、单核峰值是否持续较高
+- 前台进程是否属于浏览器、Office、IDE、Steam 大屏幕、Codex 等非游戏 GUI 黑名单
+- 开机/锁屏保护是否仍在生效
 
-**添加新游戏**: 编辑 `PowerProfile.ps1` 的 `$gameKeywords` 数组, 加入进程名关键词。
+如果某个软件全屏但 CPU/GPU 都很低, 会保持当前模式, 不会只因为全屏 D3D 就切到 Game。
 
 ## 故障排查
 

@@ -96,11 +96,22 @@ public class Win32Util {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool SwitchDesktop(IntPtr hDesktop);
+    [DllImport("user32.dll", SetLastError=true)] public static extern bool CloseDesktop(IntPtr hDesktop);
+    public const uint DESKTOP_SWITCHDESKTOP = 0x0100;
     public static uint GetIdleSeconds() {
         LASTINPUTINFO lii = new LASTINPUTINFO();
         lii.cbSize = (uint)Marshal.SizeOf(lii);
         if (!GetLastInputInfo(ref lii)) return 0;
         return (GetTickCount() - lii.dwTime) / 1000;
+    }
+    public static bool IsWorkstationLocked() {
+        IntPtr hDesktop = OpenInputDesktop(0, false, DESKTOP_SWITCHDESKTOP);
+        if (hDesktop == IntPtr.Zero) return true;
+        bool canSwitch = SwitchDesktop(hDesktop);
+        CloseDesktop(hDesktop);
+        return !canSwitch;
     }
 }
 '@
@@ -139,7 +150,37 @@ function Test-FullscreenD3DApp {
         IsFs = $isFs
         IsD3D = $isD3D
         Proc = if ($proc) { $proc.ProcessName } else { '(unknown)' }
+        Pid = $procId
     }
+}
+
+function Get-ProcessLabel {
+    param([int]$ProcessId, [string]$FallbackName = '')
+    if ($ProcessId -gt 0) {
+        $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($p) { return "$($p.ProcessName).exe pid=$ProcessId" }
+        return "pid=$ProcessId"
+    }
+    if ($FallbackName) { return "$FallbackName.exe" }
+    return '(unknown)'
+}
+
+function Get-TopCpuProcess {
+    try {
+        $sample = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.IDProcess -gt 0 -and $_.Name -notin @('_Total', 'Idle') } |
+            Sort-Object PercentProcessorTime -Descending |
+            Select-Object -First 1
+        if ($sample) {
+            return @{
+                Name = $sample.Name
+                Pid = [int]$sample.IDProcess
+                Cpu = [int]$sample.PercentProcessorTime
+                Label = (Get-ProcessLabel -ProcessId ([int]$sample.IDProcess) -FallbackName $sample.Name)
+            }
+        }
+    } catch {}
+    return @{ Name = ''; Pid = 0; Cpu = 0; Label = 'unknown' }
 }
 
 function Get-LoadSamples {
@@ -147,12 +188,23 @@ function Get-LoadSamples {
     $gpuVals = @()
     $cpuVals = @()
     $coreMaxVals = @()  # 每次采样所有核心里最高的占用 (识别单核瓶颈游戏, 如 RimWorld)
+    $gpuByPid = @{}
     for ($i = 0; $i -lt $Count; $i++) {
         try {
             $gpuSamples = Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction SilentlyContinue
             $sumGpu = if ($gpuSamples) {
                 ($gpuSamples.CounterSamples | Measure-Object CookedValue -Sum).Sum
             } else { 0 }
+            if ($gpuSamples) {
+                foreach ($s in $gpuSamples.CounterSamples) {
+                    if ($s.CookedValue -le 0) { continue }
+                    if ($s.Path -match 'pid_(\d+)') {
+                        $gpuProcessId = [int]$matches[1]
+                        if (-not $gpuByPid.ContainsKey($gpuProcessId)) { $gpuByPid[$gpuProcessId] = 0.0 }
+                        $gpuByPid[$gpuProcessId] += [double]$s.CookedValue
+                    }
+                }
+            }
             # 同时拿单核 + 总占用 (一次 Get-Counter 调用拿所有核心)
             $cpuAllCores = Get-Counter '\Processor(*)\% Processor Time' -ErrorAction SilentlyContinue
             $cpuTotal = 0
@@ -172,6 +224,16 @@ function Get-LoadSamples {
         } catch {}
         if ($i -lt ($Count - 1)) { Start-Sleep -Milliseconds $IntervalMs }
     }
+    $topGpuPid = 0
+    $topGpuAvg = 0
+    if ($gpuByPid.Count -gt 0) {
+        $topGpu = $gpuByPid.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
+        if ($topGpu) {
+            $topGpuPid = [int]$topGpu.Key
+            $topGpuAvg = [math]::Min(100, [double]$topGpu.Value / [Math]::Max(1, $Count))
+        }
+    }
+    $topCpu = Get-TopCpuProcess
     return @{
         MinGpu = if ($gpuVals.Count) { ($gpuVals | Measure-Object -Minimum).Minimum } else { 0 }
         MinCpu = if ($cpuVals.Count) { ($cpuVals | Measure-Object -Minimum).Minimum } else { 0 }
@@ -179,7 +241,18 @@ function Get-LoadSamples {
         AvgGpu = if ($gpuVals.Count) { ($gpuVals | Measure-Object -Average).Average } else { 0 }
         AvgCpu = if ($cpuVals.Count) { ($cpuVals | Measure-Object -Average).Average } else { 0 }
         AvgCoreMax = if ($coreMaxVals.Count) { ($coreMaxVals | Measure-Object -Average).Average } else { 0 }
+        TopGpuPid = $topGpuPid
+        TopGpuAvg = $topGpuAvg
+        TopGpuLabel = if ($topGpuPid -gt 0) { Get-ProcessLabel -ProcessId $topGpuPid } else { 'none' }
+        TopCpuPid = $topCpu.Pid
+        TopCpuValue = $topCpu.Cpu
+        TopCpuLabel = $topCpu.Label
     }
+}
+
+function Format-LoadSummary {
+    param($Load)
+    return "GPU3D=$([int]$Load.AvgGpu)% topGPU=$($Load.TopGpuLabel) $([int]$Load.TopGpuAvg)% CPU=$([int]$Load.AvgCpu)% topCPU=$($Load.TopCpuLabel) $($Load.TopCpuValue)% corePeak=$([int]$Load.AvgCoreMax)%"
 }
 
 # 已知"非游戏 GUI 应用"黑名单 (即便全屏 + D3D 也不算游戏)
@@ -195,14 +268,15 @@ $Script:NonGameProcesses = @(
     'zoom', 'teams', 'wemeetapp',
     # IDE / 开发
     'code', 'devenv', 'idea64', 'pycharm64', 'clion64', 'webstorm64', 'goland64', 'rider64',
-    'cursor', 'sublime_text', 'notepad++', 'atom',
+    'cursor', 'sublime_text', 'notepad++', 'atom', 'codex', 'codex-app', 'chatgpt',
+    'claude', 'windsurf', 'trae', 'zed', 'windowsterminal', 'wt', 'powershell', 'pwsh', 'cmd',
     # 视频播放/编辑
     'vlc', 'mpv', 'mpc-hc64', 'mpc-be64', 'potplayermini64', 'potplayer',
     'obs64', 'davinci', 'adobepremierepro', 'aftereffects',
     # 图片/PDF
     'photoshop', 'illustrator', 'acrord32', 'foxitreader', 'sumatrapdf',
     # 系统/Shell
-    'explorer', 'dwm', 'taskmgr', 'mmc', 'consent', 'logonui',
+    'explorer', 'dwm', 'taskmgr', 'mmc', 'consent', 'logonui', 'lockapp',
     # 设计
     'figma', 'sketch', 'xd',
     # 游戏启动器 (Steam Big Picture/Epic/Battle.net 等大屏幕模式是 UI 不是游戏)
@@ -212,60 +286,111 @@ $Script:NonGameProcesses = @(
     'riotclientservices', 'riotclientux'
 )
 
-function Test-GameRunning {
-    # 优先检查: 前台全屏 + D3D + 非黑名单 -> 直接 Game
-    # (手柄玩游戏不动键鼠也能识别, 不会被后续 idle 检测误判)
-    $fs = Test-FullscreenD3DApp
-    if ($fs.IsFs -and $fs.IsD3D) {
-        $procLower = $fs.Proc.ToLower()
-        $isBlacklisted = $Script:NonGameProcesses -contains $procLower
-        if (-not $isBlacklisted) {
-            return @{
-                IsGame = $true
-                Reason = "全屏3D [$($fs.Proc)] 优先识别"
+$Script:StartupNeutralProcesses = @(
+    '', '(unknown)', 'explorer', 'dwm', 'logonui', 'lockapp', 'sihost',
+    'shellexperiencehost', 'startmenuexperiencehost', 'searchhost', 'searchapp',
+    'textinputhost', 'applicationframehost', 'userinit', 'winlogon'
+)
+
+function Get-BootStamp {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+        if ($os -and $os.LastBootUpTime) {
+            $boot = $os.LastBootUpTime
+            if ($boot -is [DateTime]) {
+                return $boot.ToString('yyyy-MM-ddTHH:mm:ss')
             }
+            return ([System.Management.ManagementDateTimeConverter]::ToDateTime([string]$boot)).ToString('yyyy-MM-ddTHH:mm:ss')
         }
+    } catch {}
+    return ''
+}
+
+function Test-StartupGuard {
+    param($Foreground, [int]$IdleSeconds)
+
+    $bootStamp = Get-BootStamp
+    if (-not $bootStamp) { return @{ Active = $false; Reason = '' } }
+
+    $releasePath = Join-Path $PSScriptRoot 'boot_guard_released.txt'
+    $releasedBoot = if (Test-Path $releasePath) {
+        (Get-Content $releasePath -Raw -ErrorAction SilentlyContinue).Trim()
+    } else { '' }
+    if ($releasedBoot -eq $bootStamp) {
+        return @{ Active = $false; Reason = '' }
+    }
+
+    $procLower = if ($Foreground.Proc) { $Foreground.Proc.ToLower() } else { '' }
+    $locked = $false
+    try { $locked = [Win32Util]::IsWorkstationLocked() } catch {}
+    if ($locked) {
+        return @{
+            Active = $true
+            Reason = "开机保护: 锁屏/未进入桌面, 保持静音 (front=$($Foreground.Proc), idle=${IdleSeconds}s)"
+        }
+    }
+
+    if ($IdleSeconds -gt 30 -or ($Script:StartupNeutralProcesses -contains $procLower)) {
+        return @{
+            Active = $true
+            Reason = "开机保护: 等待解锁后用户启动应用, 保持静音 (front=$($Foreground.Proc), idle=${IdleSeconds}s)"
+        }
+    }
+
+    try { $bootStamp | Out-File -FilePath $releasePath -Encoding ASCII -NoNewline } catch {}
+    return @{
+        Active = $false
+        Reason = "开机保护已解除: front=$($Foreground.Proc), idle=${IdleSeconds}s"
+    }
+}
+
+function Test-GameRunning {
+    $fs = Test-FullscreenD3DApp
+    $idle = [Win32Util]::GetIdleSeconds()
+
+    $startupGuard = Test-StartupGuard -Foreground $fs -IdleSeconds $idle
+    if ($startupGuard.Active) {
+        return @{ IsGame = $false; ForceIdle = $true; Reason = $startupGuard.Reason }
     }
 
     # Layer 1: 用户离开判定 (保留, 但加双重确认防止手柄误判)
-    #   只在前台**不是**全屏游戏时才考虑 idle (上面已 short-circuit)
-    $idle = [Win32Util]::GetIdleSeconds()
+    #   低负载时直接 Idle; 全屏 3D 也不能只凭窗口形态切 Game
     $quickSample = Get-LoadSamples -Count 1 -IntervalMs 0
     if ($idle -gt $Settings.UserIdleSec) {
-        if ($quickSample.MinGpu -lt 10 -and $quickSample.MinCoreMax -lt 30) {
+        if ($quickSample.MinGpu -lt 10 -and $quickSample.MinCoreMax -lt 30 -and $quickSample.MinCpu -lt 20) {
             return @{ IsGame = $false
-                Reason = "人离开 ${idle}s + 低负载 GPU$([int]$quickSample.AvgGpu)% 核峰$([int]$quickSample.AvgCoreMax)%" }
-        }
-    }
-
-    # 层 2 (强): 前台全屏 + 加载 3D API + 不在 GUI 黑名单
-    #   - 黑名单排除 PPT/Word/浏览器/IDE/视频播放器 等 (它们全屏也加载 D3D)
-    #   - 不在黑名单 + 全屏 + D3D 几乎一定是游戏, 不要求占用率
-    #   - 这样 RimWorld / 小型独立游戏 / 模拟器 等 GPU/CPU 占用低的游戏也能命中
-    if ($fs.IsFs -and $fs.IsD3D) {
-        $procLower = $fs.Proc.ToLower()
-        $isBlacklisted = $Script:NonGameProcesses -contains $procLower
-        if (-not $isBlacklisted) {
-            return @{
-                IsGame = $true
-                Reason = "全屏3D [$($fs.Proc)] 白名单进程"
-            }
+                Reason = "人离开 ${idle}s + 低负载 ($(Format-LoadSummary $quickSample))" }
         }
     }
 
     # 以下层需要采样数据, 才开始耗时采样
     $load = Get-LoadSamples -Count 3 -IntervalMs 700
+    $loadSummary = Format-LoadSummary $load
 
     # 前台进程是否在 GUI 黑名单 (浏览器/Office/IDE 等)
     # 如果是, 后续基于负载的层 4/5/6 全部跳过 - 浏览器看视频/网页 WebGL 不算游戏
     $fgProcLower = $fs.Proc.ToLower()
     $fgIsGuiApp  = $Script:NonGameProcesses -contains $fgProcLower
 
-    # 层 3: 全屏 + D3D + GUI 黑名单进程 - 此时唯有大负载才算 (PPT 飙满才认游戏)
+    # 层 2: 全屏 + D3D 只是候选; 必须有真实负载才切 Game, 避免 Steam 大屏幕/Codex/软件全屏误判.
+    if ($fs.IsFs -and $fs.IsD3D -and -not $fgIsGuiApp) {
+        if ($load.MinGpu -ge 15 -or $load.MinCoreMax -ge 45 -or $load.MinCpu -ge 20) {
+            return @{
+                IsGame = $true
+                Reason = "全屏3D活跃 [$($fs.Proc).exe pid=$($fs.Pid)] $loadSummary"
+            }
+        }
+        return @{
+            IsGame = $false
+            Reason = "全屏3D但低负载 [$($fs.Proc).exe pid=$($fs.Pid)] 不切 Game; $loadSummary"
+        }
+    }
+
+    # 层 3: 全屏 + D3D + GUI 黑名单进程 - 此时唯有大负载才算 (PPT/浏览器/IDE 飙满才认)
     if ($fs.IsFs -and $fs.IsD3D -and $load.MinGpu -ge 40 -and $load.MinCoreMax -ge 70) {
         return @{
             IsGame = $true
-            Reason = "GUI全屏高负载 [$($fs.Proc)] GPU $([int]$load.AvgGpu)% 核峰 $([int]$load.AvgCoreMax)%"
+            Reason = "GUI全屏高负载 [$($fs.Proc).exe pid=$($fs.Pid)] $loadSummary"
         }
     }
 
@@ -274,7 +399,7 @@ function Test-GameRunning {
     if ($fgIsGuiApp) {
         return @{
             IsGame = $false
-            Reason = "前台是 [$($fs.Proc)] (黑名单 GUI), 高负载也不算游戏"
+            Reason = "前台是 [$($fs.Proc).exe pid=$($fs.Pid)] (黑名单 GUI), 不切 Game; $loadSummary"
         }
     }
 
@@ -282,7 +407,7 @@ function Test-GameRunning {
     if ($load.MinCoreMax -ge 85) {
         return @{
             IsGame = $true
-            Reason = "单核瓶颈 核峰 $([int]$load.AvgCoreMax)% 持续"
+            Reason = "单核瓶颈: $loadSummary"
         }
     }
 
@@ -290,7 +415,7 @@ function Test-GameRunning {
     if ($load.MinGpu -ge 50 -and $load.MinCpu -ge 30) {
         return @{
             IsGame = $true
-            Reason = "高负载 GPU $([int]$load.AvgGpu)% CPU $([int]$load.AvgCpu)% 持续"
+            Reason = "GPU+CPU 高负载: $loadSummary"
         }
     }
 
@@ -298,19 +423,22 @@ function Test-GameRunning {
     if ($load.MinGpu -ge 70) {
         return @{
             IsGame = $true
-            Reason = "GPU 重载 $([int]$load.AvgGpu)% 持续"
+            Reason = "GPU 重载: $loadSummary"
         }
     }
 
     return @{
         IsGame = $false
-        Reason = "fs=$($fs.IsFs) d3d=$($fs.IsD3D) proc=$($fs.Proc) GPU3D$([int]$load.AvgGpu)% CPU$([int]$load.AvgCpu)% 核峰$([int]$load.AvgCoreMax)%"
+        Reason = "无游戏信号: fs=$($fs.IsFs) d3d=$($fs.IsD3D) front=$($fs.Proc).exe pid=$($fs.Pid); $loadSummary"
     }
 }
 
 # === Apply Profile ============================================================
 function Set-PowerProfile {
-    param([string]$Name)
+    param(
+        [string]$Name,
+        [string]$Reason = ''
+    )
 
     $cfg = $Profiles[$Name]
     if (-not $cfg) { throw "未知模式: $Name" }
@@ -386,9 +514,11 @@ function Set-PowerProfile {
 
     # 日志
     $logPath = Join-Path $PSScriptRoot 'profile.log'
-    $logLine = "{0}  switched to {1} (Boost={2} FreqMax={3}MHz throttle={4}%-{5}% EPP={6} Autonomous={7})" -f `
+    if (-not $Reason) { $Reason = '未记录原因' }
+    $Reason = ($Reason -replace '\s+', ' ').Trim()
+    $logLine = "{0}  switched to {1} (Boost={2} FreqMax={3}MHz throttle={4}%-{5}% EPP={6} Autonomous={7}) Reason: {8}" -f `
         (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Name, $cfg.Boost, $cfg.FreqMax, `
-        $throttleMin, $throttleMax, $epp, $autonomous
+        $throttleMin, $throttleMax, $epp, $autonomous, $Reason
     Add-Content -Path $logPath -Value $logLine -Encoding UTF8
 }
 
@@ -399,10 +529,28 @@ if ($Mode -eq 'Auto') {
     $current = if (Test-Path $statePath) { (Get-Content $statePath -Raw).Trim() } else { 'Idle' }
 
     $detection = Test-GameRunning
-    if ($detection.IsGame) {
+    if ($detection.ForceIdle) {
+        $bootStamp = Get-BootStamp
+        $guardApplyPath = Join-Path $PSScriptRoot 'boot_guard_idle_applied.txt'
+        $appliedBoot = if (Test-Path $guardApplyPath) {
+            (Get-Content $guardApplyPath -Raw -ErrorAction SilentlyContinue).Trim()
+        } else { '' }
+        $needsGuardApply = ($current -ne 'Idle') -or ($bootStamp -and $appliedBoot -ne $bootStamp)
+
+        if ($needsGuardApply) {
+            Set-PowerProfile -Name 'Idle' -Reason $detection.Reason
+            Write-Host "[AUTO] 强制保持 Idle ($($detection.Reason))" -ForegroundColor Green
+            if ($bootStamp) {
+                $bootStamp | Out-File -FilePath $guardApplyPath -Encoding ASCII -NoNewline
+            }
+        } else {
+            Write-Host "[AUTO] 保持 Idle ($($detection.Reason))" -ForegroundColor Gray
+        }
+        '0' | Out-File -FilePath $missCountPath -Encoding ASCII -NoNewline
+    } elseif ($detection.IsGame) {
         # 检测到游戏 - 切 Game, 重置 miss 计数
         if ($current -ne 'Game') {
-            Set-PowerProfile -Name 'Game'
+            Set-PowerProfile -Name 'Game' -Reason $detection.Reason
             Write-Host "[AUTO] 检测到游戏 -> Game 模式 ($($detection.Reason))" -ForegroundColor Yellow
         } else {
             Write-Host "[AUTO] 维持 Game 模式 ($($detection.Reason))" -ForegroundColor Gray
@@ -418,8 +566,9 @@ if ($Mode -eq 'Auto') {
         $threshold = $Settings.GameExitMissCount
         if ($miss -ge $threshold) {
             # 连续 N 次都没游戏 -> 切回 Idle (N 由 settings 控制, 默认 6 次 ≈ 60-120 秒)
-            Set-PowerProfile -Name 'Idle'
-            Write-Host "[AUTO] 连续 $miss 次无游戏 -> 切回 Idle 模式" -ForegroundColor Green
+            $reason = "连续 $miss 次无游戏; 最后一次检测: $($detection.Reason)"
+            Set-PowerProfile -Name 'Idle' -Reason $reason
+            Write-Host "[AUTO] 连续 $miss 次无游戏 -> 切回 Idle 模式 ($reason)" -ForegroundColor Green
             '0' | Out-File -FilePath $missCountPath -Encoding ASCII -NoNewline
         } else {
             $miss | Out-File -FilePath $missCountPath -Encoding ASCII -NoNewline
@@ -430,6 +579,6 @@ if ($Mode -eq 'Auto') {
         Write-Host "[AUTO] 无游戏, 维持当前 $current 模式 ($($detection.Reason))" -ForegroundColor Gray
     }
 } else {
-    Set-PowerProfile -Name $Mode
+    Set-PowerProfile -Name $Mode -Reason "手动切换: 命令行参数 -Mode $Mode"
     Write-Host "[MANUAL] 切换到 $Mode 模式: $($Profiles[$Mode].Desc)" -ForegroundColor Cyan
 }
