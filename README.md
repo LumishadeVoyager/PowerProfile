@@ -43,6 +43,8 @@ E:\PowerProfile\
 按设置里的间隔检测系统状态:
 - 锁屏/刚开机未进入桌面时强制保持 **Idle** 模式
 - 检测到全屏 3D 且存在真实 CPU/GPU 负载, 或后台持续高负载 → 自动切 **Game** 模式
+- 前台是浏览器、Codex/IDE、Office、Steam 大屏幕等硬排除 GUI 时, 即使全屏也不会切 **Game** 模式
+- 当前处于 **Game** 模式时, 鼠标/键盘/常见 XInput 手柄超过设置阈值无输入 → 临时强制 **Idle**; 输入恢复后切回之前模式
 - 游戏退出后连续多次检测不到游戏 → 自动切回 **Idle** 模式
 - 每次真正切换都会在 `profile.log` 记录原因, 包括前台 exe、top CPU/GPU 进程和负载数据
 
@@ -56,7 +58,7 @@ E:\PowerProfile\
 
 右键托盘图标 → **设置...**:
 - 三个模式的频率上限使用预设挡位, 不需要手填 MHz
-- 自动检测、人离开判定、提示时长、手动锁定恢复、游戏退出防抖都使用易懂挡位
+- 自动检测、人离开判定、提示时长、手动锁定恢复、游戏空闲静音、游戏退出防抖都使用易懂挡位
 - 如果 `settings.json` 里已有自定义数值, 设置窗口会显示为"当前自定义", 保存时会保留该值
 - `settings.json` 是本机运行配置, 不再提交到仓库; 仓库里保留 `settings.example.json` 作为参考
 
@@ -78,8 +80,10 @@ powershell -File E:\PowerProfile\PowerProfile.ps1 -Mode Auto
 - GPU 3D、总 CPU、单核峰值是否持续较高
 - 前台进程是否属于浏览器、Office、IDE、Steam 大屏幕、Codex 等非游戏 GUI 黑名单
 - 开机/锁屏保护是否仍在生效
+- Game 模式中是否超过设定时间没有鼠标/键盘/XInput 手柄输入
 
 如果某个软件全屏但 CPU/GPU 都很低, 会保持当前模式, 不会只因为全屏 D3D 就切到 Game。
+浏览器、Codex/IDE、Office、Steam 大屏幕等硬排除前台进程即使全屏高负载也不会切到 Game。
 
 ## 故障排查
 

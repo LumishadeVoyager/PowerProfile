@@ -2,6 +2,7 @@
 current_mode.txt
 auto_enabled.txt
 game_miss_count.txt
+idle_quiet_state.json
 boot_guard_*.txt
 settings.json
 .codex/

@@ -5,6 +5,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerScript = Join-Path $ScriptDir 'PowerProfile.ps1'
 $StatePath = Join-Path $ScriptDir 'current_mode.txt'
 $AutoEnabledPath = Join-Path $ScriptDir 'auto_enabled.txt'
+$IdleQuietStatePath = Join-Path $ScriptDir 'idle_quiet_state.json'
 $LifecycleLog = Join-Path $ScriptDir 'tray_lifecycle.log'
 
 function Write-LifecycleLog {
@@ -68,9 +69,8 @@ public class GdiUtil {
 '@
 }
 
-# === Win32 idle 检测 (手动锁定后 idle 超时自动恢复 Auto 用) ===================
-# 注意: LASTINPUTINFO 不追踪 XInput/DInput 手柄. 用前台全屏 D3D 作为补充信号:
-# 手柄玩游戏时 LASTINPUTINFO 会持续累加, 但前台窗口是全屏游戏 -> 视为活跃
+# === Win32 idle 检测 (手动锁定恢复 Auto + 游戏空闲静音保护用) ==================
+# LASTINPUTINFO 只追踪鼠标/键盘; XInput packet number 用于补充常见手柄输入.
 if (-not ('Win32Idle' -as [type])) {
     Add-Type @'
 using System;
@@ -80,16 +80,39 @@ public class Win32Idle {
     public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XINPUT_GAMEPAD {
+        public ushort wButtons;
+        public byte bLeftTrigger;
+        public byte bRightTrigger;
+        public short sThumbLX;
+        public short sThumbLY;
+        public short sThumbRX;
+        public short sThumbRY;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XINPUT_STATE {
+        public uint dwPacketNumber;
+        public XINPUT_GAMEPAD Gamepad;
+    }
     [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO lii);
     [DllImport("kernel32.dll")] public static extern uint GetTickCount();
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("xinput1_4.dll", EntryPoint="XInputGetState")]
+    public static extern uint XInputGetState(uint dwUserIndex, out XINPUT_STATE pState);
     public static uint GetIdleSeconds() {
         LASTINPUTINFO lii = new LASTINPUTINFO();
         lii.cbSize = (uint)Marshal.SizeOf(lii);
         if (!GetLastInputInfo(ref lii)) return 0;
         return (GetTickCount() - lii.dwTime) / 1000;
+    }
+    public static uint GetXInputPacket(uint index) {
+        XINPUT_STATE state = new XINPUT_STATE();
+        uint result = XInputGetState(index, out state);
+        if (result != 0) return UInt32.MaxValue;
+        return state.dwPacketNumber;
     }
 }
 '@
@@ -122,6 +145,118 @@ function Get-EffectiveIdle {
         if ($hasD3D) { return 0 }   # 全屏 + 3D = 玩游戏, 不算 idle
     } catch {}
     return $rawIdle
+}
+
+$Script:ControllerLastPacket = @{}
+$Script:ControllerLastActivity = Get-Date
+
+function Get-RawInputIdleSeconds {
+    try { return [int][Win32Idle]::GetIdleSeconds() } catch { return 0 }
+}
+
+function Get-ControllerIdleSeconds {
+    $now = Get-Date
+    $sawController = $false
+    for ($i = 0; $i -lt 4; $i++) {
+        try {
+            $packet = [Win32Idle]::GetXInputPacket([uint32]$i)
+            if ($packet -ne [uint32]::MaxValue) {
+                $sawController = $true
+                $key = [string]$i
+                if (-not $Script:ControllerLastPacket.ContainsKey($key)) {
+                    $Script:ControllerLastPacket[$key] = $packet
+                    $Script:ControllerLastActivity = $now
+                } elseif ([uint32]$Script:ControllerLastPacket[$key] -ne $packet) {
+                    $Script:ControllerLastPacket[$key] = $packet
+                    $Script:ControllerLastActivity = $now
+                }
+            }
+        } catch {}
+    }
+
+    if (-not $sawController -and $Script:ControllerLastPacket.Count -eq 0) {
+        return [int]::MaxValue
+    }
+    return [int][Math]::Max(0, [Math]::Floor((New-TimeSpan -Start $Script:ControllerLastActivity -End $now).TotalSeconds))
+}
+
+function Get-UserActivityIdleSeconds {
+    $rawIdle = Get-RawInputIdleSeconds
+    $controllerIdle = Get-ControllerIdleSeconds
+    return [int][Math]::Min($rawIdle, $controllerIdle)
+}
+
+function Read-IdleQuietState {
+    if (-not (Test-Path $IdleQuietStatePath)) {
+        return @{ Active = $false; PreviousMode = '' }
+    }
+    try {
+        $j = Get-Content $IdleQuietStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        return @{
+            Active = [bool]$j.active
+            PreviousMode = [string]$j.previousMode
+        }
+    } catch {
+        return @{ Active = $false; PreviousMode = '' }
+    }
+}
+
+function Write-IdleQuietState {
+    param([string]$PreviousMode, [int]$IdleSeconds)
+    $obj = [PSCustomObject]@{
+        active = $true
+        previousMode = $PreviousMode
+        idleSeconds = $IdleSeconds
+        startedAt = (Get-Date).ToString('s')
+    }
+    $json = $obj | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($IdleQuietStatePath, $json, (New-Object System.Text.UTF8Encoding $true))
+}
+
+function Clear-IdleQuietState {
+    Remove-Item $IdleQuietStatePath -ErrorAction SilentlyContinue
+}
+
+function Invoke-GameIdleQuietGuard {
+    param([int]$ActivityIdleSec)
+
+    $thresholdMinutes = [int]$Script:Settings.gameIdleQuietMinutes
+    if ($thresholdMinutes -le 0) {
+        Clear-IdleQuietState
+        return 'None'
+    }
+
+    $thresholdSec = $thresholdMinutes * 60
+    $resumeSec = 5
+    $state = Read-IdleQuietState
+    $currentMode = Get-CurrentMode
+
+    if ($state.Active) {
+        if ($ActivityIdleSec -le $resumeSec) {
+            $previousMode = if (@('Idle','Balanced','Game') -contains $state.PreviousMode) { $state.PreviousMode } else { 'Game' }
+            Clear-IdleQuietState
+            if ($currentMode -ne $previousMode) {
+                Invoke-Worker -Mode $previousMode -Reason "游戏空闲静音恢复: 检测到鼠标/键盘/手柄输入, 恢复之前模式 $previousMode"
+                Show-ModeToast -Mode $previousMode -SubText '检测到输入 -> 恢复之前模式'
+            }
+            return 'Restored'
+        }
+
+        if ($currentMode -ne 'Idle') {
+            Invoke-Worker -Mode 'Idle' -Reason "游戏空闲静音保持: 鼠标/键盘/手柄无输入 ${ActivityIdleSec}s"
+        }
+        return 'Blocked'
+    }
+
+    if ($currentMode -eq 'Game' -and $ActivityIdleSec -ge $thresholdSec) {
+        Write-IdleQuietState -PreviousMode $currentMode -IdleSeconds $ActivityIdleSec
+        Invoke-Worker -Mode 'Idle' -Reason "游戏空闲静音: 鼠标/键盘/手柄无输入 ${ActivityIdleSec}s, 阈值 ${thresholdSec}s"
+        $mins = [Math]::Round($ActivityIdleSec / 60.0, 0)
+        Show-ModeToast -Mode 'Idle' -SubText "游戏无输入 ${mins} 分钟 -> 静音"
+        return 'Forced'
+    }
+
+    return 'None'
 }
 
 # === Auto 开关状态持久化 ======================================================
@@ -380,6 +515,7 @@ $DefaultSettings = @{
     userIdleSec = 90
     toastStaySec = 1.2
     manualUnlockMinutes = 10   # 手动锁定后 idle 这么久 -> 自动恢复 Auto
+    gameIdleQuietMinutes = 10   # Game 模式中鼠标/键盘/手柄无输入这么久 -> 临时强制静音
     gameExitMissCount = 6      # 连续 N 次无游戏才退出 Game 模式 (防过场/Alt-Tab 误切)
 }
 
@@ -390,6 +526,7 @@ function Read-Settings {
         userIdleSec = $DefaultSettings.userIdleSec
         toastStaySec = $DefaultSettings.toastStaySec
         manualUnlockMinutes = $DefaultSettings.manualUnlockMinutes
+        gameIdleQuietMinutes = $DefaultSettings.gameIdleQuietMinutes
         gameExitMissCount = $DefaultSettings.gameExitMissCount
     }
     foreach ($k in 'Idle','Balanced','Game') {
@@ -417,6 +554,7 @@ function Read-Settings {
             if ($null -ne $j.userIdleSec)         { $s.userIdleSec         = [int]$j.userIdleSec }
             if ($null -ne $j.toastStaySec)        { $s.toastStaySec        = [double]$j.toastStaySec }
             if ($null -ne $j.manualUnlockMinutes) { $s.manualUnlockMinutes = [int]$j.manualUnlockMinutes }
+            if ($null -ne $j.gameIdleQuietMinutes) { $s.gameIdleQuietMinutes = [int]$j.gameIdleQuietMinutes }
             if ($null -ne $j.gameExitMissCount)   { $s.gameExitMissCount   = [int]$j.gameExitMissCount }
         } catch {}
     }
@@ -435,6 +573,7 @@ function Save-Settings {
         userIdleSec = $Settings.userIdleSec
         toastStaySec = $Settings.toastStaySec
         manualUnlockMinutes = $Settings.manualUnlockMinutes
+        gameIdleQuietMinutes = $Settings.gameIdleQuietMinutes
         gameExitMissCount = $Settings.gameExitMissCount
     }
     $json = $obj | ConvertTo-Json -Depth 5
@@ -543,9 +682,11 @@ function Get-CurrentMode {
 # 非阻塞调用 worker. 之前 -Wait 会卡 UI 2 秒采样时间; 现在 fire-and-forget,
 # 状态变化由文件监视 timer 检测.
 function Invoke-Worker {
-    param([string]$Mode)
+    param([string]$Mode, [string]$Reason = '')
+    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WorkerScript, '-Mode', $Mode)
+    if ($Reason) { $args += @('-Reason', $Reason) }
     Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WorkerScript, '-Mode', $Mode) `
+        -ArgumentList $args `
         -WindowStyle Hidden
 }
 
@@ -557,7 +698,7 @@ function Show-Settings {
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size 560, 690
+    $form.ClientSize = New-Object System.Drawing.Size 560, 728
     $form.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
     $form.TopMost = $true
     $form.BackColor = [System.Drawing.Color]::FromArgb(247, 248, 250)
@@ -653,7 +794,7 @@ function Show-Settings {
     $grpOther.Text = '  其他设置  '
     $grpOther.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 10, ([System.Drawing.FontStyle]::Bold)
     $grpOther.Location = New-Object System.Drawing.Point 18, $y
-    $grpOther.Size = New-Object System.Drawing.Size 524, 218
+    $grpOther.Size = New-Object System.Drawing.Size 524, 252
     $grpOther.BackColor = [System.Drawing.Color]::White
     $form.Controls.Add($grpOther)
 
@@ -680,6 +821,13 @@ function Show-Settings {
         (New-Preset '推荐: 10 分钟' 10),
         (New-Preset '稳定: 20 分钟' 20),
         (New-Preset '保守: 45 分钟' 45)
+    )
+    $quietOptions = @(
+        (New-Preset '关闭' 0),
+        (New-Preset '推荐: 10 分钟无输入' 10),
+        (New-Preset '稳定: 15 分钟无输入' 15),
+        (New-Preset '保守: 20 分钟无输入' 20),
+        (New-Preset '很长: 30 分钟无输入' 30)
     )
     $exitOptions = @(
         (New-Preset '灵敏: 3 次无游戏' 3),
@@ -716,9 +864,10 @@ function Show-Settings {
     $cmbIdle = Add-SettingRow $grpOther '人离开判定' $idleOptions ([double]$work.userIdleSec) 20 70 '空闲超过这个挡位且低负载时保持静音。'
     $cmbToast = Add-SettingRow $grpOther '提示停留' $toastOptions ([double]$work.toastStaySec) 20 104 '托盘提示停留时间。'
     $cmbUnlock = Add-SettingRow $grpOther '恢复 Auto' $unlockOptions ([double]$work.manualUnlockMinutes) 20 138 '手动锁定后空闲多久自动恢复 Auto。'
-    $cmbExit = Add-SettingRow $grpOther '退出防抖' $exitOptions ([double]$work.gameExitMissCount) 20 172 '游戏结束后连续多少次无游戏才切回静音。'
+    $cmbQuiet = Add-SettingRow $grpOther '游戏空闲静音' $quietOptions ([double]$work.gameIdleQuietMinutes) 20 172 'Game 模式中鼠标/键盘/手柄无输入多久后临时强制静音。'
+    $cmbExit = Add-SettingRow $grpOther '退出防抖' $exitOptions ([double]$work.gameExitMissCount) 20 206 '游戏结束后连续多少次无游戏才切回静音。'
 
-    $y += 230
+    $y += 264
 
     $btnReset = New-Object System.Windows.Forms.Button
     $btnReset.Text = '恢复默认'
@@ -762,6 +911,7 @@ function Show-Settings {
             $work.userIdleSec = [int](Get-PresetValue $cmbIdle)
             $work.toastStaySec = [double](Get-PresetValue $cmbToast)
             $work.manualUnlockMinutes = [int](Get-PresetValue $cmbUnlock)
+            $work.gameIdleQuietMinutes = [int](Get-PresetValue $cmbQuiet)
             $work.gameExitMissCount = [int](Get-PresetValue $cmbExit)
             Save-Settings -Settings $work
             Add-Content -Path $diag -Value "  Save-Settings 已调用 -> $SettingsPath" -Encoding UTF8
@@ -1004,13 +1154,17 @@ $Script:AutoTimer.Add_Tick({
     $dbg = Join-Path $ScriptDir 'unlock_debug.log'
     $auto = Get-AutoEnabled
     $idleSec = Get-EffectiveIdle   # 全屏游戏时返回 0, 避免手柄玩游戏被误判 idle
+    $activityIdleSec = Get-UserActivityIdleSeconds
+    $quietGuard = Invoke-GameIdleQuietGuard -ActivityIdleSec $activityIdleSec
     $unlockSec = [int]$Script:Settings.manualUnlockMinutes * 60
     try {
-        $line = "{0}  auto={1}  idle={2}s  threshold={3}s  willUnlock={4}" -f `
-            (Get-Date -Format 'HH:mm:ss'), $auto, $idleSec, $unlockSec, `
+        $line = "{0}  auto={1}  idle={2}s  inputIdle={3}s  threshold={4}s  quietGuard={5}  willUnlock={6}" -f `
+            (Get-Date -Format 'HH:mm:ss'), $auto, $idleSec, $activityIdleSec, $unlockSec, $quietGuard, `
             ((-not $auto) -and ($idleSec -ge $unlockSec))
         Add-Content -Path $dbg -Value $line -Encoding UTF8
     } catch {}
+
+    if ($quietGuard -ne 'None') { return }
 
     if ($auto) {
         Invoke-Worker -Mode 'Auto'

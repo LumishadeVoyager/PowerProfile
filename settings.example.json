@@ -26,5 +26,6 @@
   "userIdleSec": 90,
   "toastStaySec": 1.2,
   "manualUnlockMinutes": 20,
+  "gameIdleQuietMinutes": 10,
   "gameExitMissCount": 6
 }

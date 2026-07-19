@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [ValidateSet('Idle','Balanced','Game','Auto')]
-    [string]$Mode = 'Auto'
+    [string]$Mode = 'Auto',
+
+    [string]$Reason = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -286,6 +288,20 @@ $Script:NonGameProcesses = @(
     'riotclientservices', 'riotclientux'
 )
 
+# 硬排除: 这些前台进程即使全屏 + D3D + 高负载, 也不按游戏处理.
+# 主要用于避免全屏浏览器、Codex/IDE、Steam 大屏幕等 UI 误触发 Game.
+$Script:HardNonGameProcesses = @(
+    'chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'iexplore', '360se', '360chrome',
+    'code', 'devenv', 'idea64', 'pycharm64', 'clion64', 'webstorm64', 'goland64', 'rider64',
+    'cursor', 'sublime_text', 'notepad++', 'atom', 'codex', 'codex-app', 'chatgpt',
+    'claude', 'windsurf', 'trae', 'zed', 'windowsterminal', 'wt', 'powershell', 'pwsh', 'cmd',
+    'powerpnt', 'winword', 'excel', 'onenote', 'msaccess', 'outlook', 'visio',
+    'wps', 'wpp', 'et', 'wpsoffice',
+    'steam', 'steamwebhelper', 'epicgameslauncher', 'battle.net', 'gog galaxy',
+    'origin', 'eaapp', 'eadesktop', 'uplay', 'ubisoftconnect',
+    'riotclientservices', 'riotclientux'
+)
+
 $Script:StartupNeutralProcesses = @(
     '', '(unknown)', 'explorer', 'dwm', 'logonui', 'lockapp', 'sihost',
     'shellexperiencehost', 'startmenuexperiencehost', 'searchhost', 'searchapp',
@@ -368,9 +384,10 @@ function Test-GameRunning {
     $loadSummary = Format-LoadSummary $load
 
     # 前台进程是否在 GUI 黑名单 (浏览器/Office/IDE 等)
-    # 如果是, 后续基于负载的层 4/5/6 全部跳过 - 浏览器看视频/网页 WebGL 不算游戏
+    # 硬排除列表不会进入 GUI 高负载兜底, 避免浏览器/WebGL/Codex/Steam 大屏幕误判.
     $fgProcLower = $fs.Proc.ToLower()
     $fgIsGuiApp  = $Script:NonGameProcesses -contains $fgProcLower
+    $fgIsHardNonGame = $Script:HardNonGameProcesses -contains $fgProcLower
 
     # 层 2: 全屏 + D3D 只是候选; 必须有真实负载才切 Game, 避免 Steam 大屏幕/Codex/软件全屏误判.
     if ($fs.IsFs -and $fs.IsD3D -and -not $fgIsGuiApp) {
@@ -386,11 +403,18 @@ function Test-GameRunning {
         }
     }
 
-    # 层 3: 全屏 + D3D + GUI 黑名单进程 - 此时唯有大负载才算 (PPT/浏览器/IDE 飙满才认)
-    if ($fs.IsFs -and $fs.IsD3D -and $load.MinGpu -ge 40 -and $load.MinCoreMax -ge 70) {
+    # 层 3: 全屏 + D3D + GUI 黑名单进程 - 非硬排除 GUI 唯有大负载才算.
+    if ($fs.IsFs -and $fs.IsD3D -and -not $fgIsHardNonGame -and $load.MinGpu -ge 40 -and $load.MinCoreMax -ge 70) {
         return @{
             IsGame = $true
             Reason = "GUI全屏高负载 [$($fs.Proc).exe pid=$($fs.Pid)] $loadSummary"
+        }
+    }
+
+    if ($fgIsHardNonGame) {
+        return @{
+            IsGame = $false
+            Reason = "前台是硬排除 GUI [$($fs.Proc).exe pid=$($fs.Pid)] 不切 Game; $loadSummary"
         }
     }
 
@@ -579,6 +603,7 @@ if ($Mode -eq 'Auto') {
         Write-Host "[AUTO] 无游戏, 维持当前 $current 模式 ($($detection.Reason))" -ForegroundColor Gray
     }
 } else {
-    Set-PowerProfile -Name $Mode -Reason "手动切换: 命令行参数 -Mode $Mode"
+    $manualReason = if ($Reason) { $Reason } else { "手动切换: 命令行参数 -Mode $Mode" }
+    Set-PowerProfile -Name $Mode -Reason $manualReason
     Write-Host "[MANUAL] 切换到 $Mode 模式: $($Profiles[$Mode].Desc)" -ForegroundColor Cyan
 }
