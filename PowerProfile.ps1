@@ -228,12 +228,19 @@ function Get-LoadSamples {
     }
     $topGpuPid = 0
     $topGpuAvg = 0
+    $topGpuName = ''
     if ($gpuByPid.Count -gt 0) {
         $topGpu = $gpuByPid.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
         if ($topGpu) {
             $topGpuPid = [int]$topGpu.Key
             $topGpuAvg = [math]::Min(100, [double]$topGpu.Value / [Math]::Max(1, $Count))
         }
+    }
+    if ($topGpuPid -gt 0) {
+        try {
+            $topGpuProcess = Get-Process -Id $topGpuPid -ErrorAction SilentlyContinue
+            if ($topGpuProcess) { $topGpuName = $topGpuProcess.ProcessName.ToLower() }
+        } catch {}
     }
     $topCpu = Get-TopCpuProcess
     return @{
@@ -244,6 +251,7 @@ function Get-LoadSamples {
         AvgCpu = if ($cpuVals.Count) { ($cpuVals | Measure-Object -Average).Average } else { 0 }
         AvgCoreMax = if ($coreMaxVals.Count) { ($coreMaxVals | Measure-Object -Average).Average } else { 0 }
         TopGpuPid = $topGpuPid
+        TopGpuName = $topGpuName
         TopGpuAvg = $topGpuAvg
         TopGpuLabel = if ($topGpuPid -gt 0) { Get-ProcessLabel -ProcessId $topGpuPid } else { 'none' }
         TopCpuPid = $topCpu.Pid
@@ -279,6 +287,12 @@ $Script:NonGameProcesses = @(
     'photoshop', 'illustrator', 'acrord32', 'foxitreader', 'sumatrapdf',
     # 系统/Shell
     'explorer', 'dwm', 'taskmgr', 'mmc', 'consent', 'logonui', 'lockapp',
+    'sihost', 'shellexperiencehost', 'startmenuexperiencehost', 'searchhost', 'searchapp',
+    'textinputhost', 'applicationframehost', 'userinit', 'winlogon',
+    # 桌面动态壁纸/开机组件 (可持续使用 GPU, 但绝不是游戏)
+    'wallpaper32', 'wallpaper64', 'wallpaperui32', 'wallpaperui64',
+    'msedgewebview2', 'widgetservice', 'widgetboard', 'crossdeviceservice',
+    'hwinfo64', 'rtss', 'rtsshooksloader64',
     # 设计
     'figma', 'sketch', 'xd',
     # 游戏启动器 (Steam Big Picture/Epic/Battle.net 等大屏幕模式是 UI 不是游戏)
@@ -288,24 +302,16 @@ $Script:NonGameProcesses = @(
     'riotclientservices', 'riotclientux'
 )
 
-# 硬排除: 这些前台进程即使全屏 + D3D + 高负载, 也不按游戏处理.
-# 主要用于避免全屏浏览器、Codex/IDE、Steam 大屏幕等 UI 误触发 Game.
-$Script:HardNonGameProcesses = @(
-    'chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'iexplore', '360se', '360chrome',
-    'code', 'devenv', 'idea64', 'pycharm64', 'clion64', 'webstorm64', 'goland64', 'rider64',
-    'cursor', 'sublime_text', 'notepad++', 'atom', 'codex', 'codex-app', 'chatgpt',
-    'claude', 'windsurf', 'trae', 'zed', 'windowsterminal', 'wt', 'powershell', 'pwsh', 'cmd',
-    'powerpnt', 'winword', 'excel', 'onenote', 'msaccess', 'outlook', 'visio',
-    'wps', 'wpp', 'et', 'wpsoffice',
-    'steam', 'steamwebhelper', 'epicgameslauncher', 'battle.net', 'gog galaxy',
-    'origin', 'eaapp', 'eadesktop', 'uplay', 'ubisoftconnect',
-    'riotclientservices', 'riotclientux'
-)
+# 硬排除: 所有已知非游戏 GUI 即使全屏 + D3D + 高负载, 也不按游戏处理.
+# 这覆盖浏览器、Codex/IDE、桌面壳、Steam 大屏幕和动态壁纸等 UI.
+$Script:HardNonGameProcesses = @($Script:NonGameProcesses | Select-Object -Unique)
 
 $Script:StartupNeutralProcesses = @(
-    '', '(unknown)', 'explorer', 'dwm', 'logonui', 'lockapp', 'sihost',
-    'shellexperiencehost', 'startmenuexperiencehost', 'searchhost', 'searchapp',
-    'textinputhost', 'applicationframehost', 'userinit', 'winlogon'
+    @(
+        '', '(unknown)', 'explorer', 'dwm', 'logonui', 'lockapp', 'sihost',
+        'shellexperiencehost', 'startmenuexperiencehost', 'searchhost', 'searchapp',
+        'textinputhost', 'applicationframehost', 'userinit', 'winlogon'
+    ) + $Script:NonGameProcesses | Select-Object -Unique
 )
 
 function Get-BootStamp {
@@ -388,6 +394,7 @@ function Test-GameRunning {
     $fgProcLower = $fs.Proc.ToLower()
     $fgIsGuiApp  = $Script:NonGameProcesses -contains $fgProcLower
     $fgIsHardNonGame = $Script:HardNonGameProcesses -contains $fgProcLower
+    $topGpuIsHardNonGame = $Script:HardNonGameProcesses -contains $load.TopGpuName
 
     # 层 2: 全屏 + D3D 只是候选; 必须有真实负载才切 Game, 避免 Steam 大屏幕/Codex/软件全屏误判.
     if ($fs.IsFs -and $fs.IsD3D -and -not $fgIsGuiApp) {
@@ -424,6 +431,15 @@ function Test-GameRunning {
         return @{
             IsGame = $false
             Reason = "前台是 [$($fs.Proc).exe pid=$($fs.Pid)] (黑名单 GUI), 不切 Game; $loadSummary"
+        }
+    }
+
+    # 桌面动态壁纸、WebView 等后台渲染器会持续占用 GPU；没有真实游戏前台时，
+    # 不让它们独自触发纯负载兜底，避免开机后桌面被误判为 Game。
+    if ($topGpuIsHardNonGame) {
+        return @{
+            IsGame = $false
+            Reason = "GPU 最高进程是后台排除项 [$($load.TopGpuLabel)], 不切 Game; $loadSummary"
         }
     }
 
