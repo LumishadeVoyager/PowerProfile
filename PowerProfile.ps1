@@ -3,7 +3,9 @@ param(
     [ValidateSet('Idle','Balanced','Game','Auto')]
     [string]$Mode = 'Auto',
 
-    [string]$Reason = ''
+    [string]$Reason = '',
+
+    [int]$ActivityIdleSec = -1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,6 +73,7 @@ function Read-Settings {
 
 $Settings = Read-Settings
 $Profiles = $Settings.Profiles
+$DetectionStatePath = Join-Path $PSScriptRoot 'game_detection_state.json'
 
 # === Auto Detection ===========================================================
 # 检测逻辑参考现成成熟方案 (不再使用进程白名单):
@@ -265,6 +268,25 @@ function Format-LoadSummary {
     return "GPU3D=$([int]$Load.AvgGpu)% topGPU=$($Load.TopGpuLabel) $([int]$Load.TopGpuAvg)% CPU=$([int]$Load.AvgCpu)% topCPU=$($Load.TopCpuLabel) $($Load.TopCpuValue)% corePeak=$([int]$Load.AvgCoreMax)%"
 }
 
+function Write-GameDetectionState {
+    param($Detection, [int]$InputIdleSeconds)
+
+    try {
+        $obj = [PSCustomObject]@{
+            observedAt = (Get-Date).ToUniversalTime().ToString('o')
+            isGame = [bool]$Detection.IsGame
+            forceIdle = [bool]$Detection.ForceIdle
+            source = [string]$Detection.Source
+            processName = [string]$Detection.ProcessName
+            processId = [int]$Detection.ProcessId
+            inputIdleSeconds = $InputIdleSeconds
+            reason = [string]$Detection.Reason
+        }
+        $json = $obj | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($DetectionStatePath, $json, (New-Object System.Text.UTF8Encoding $true))
+    } catch {}
+}
+
 # 已知"非游戏 GUI 应用"黑名单 (即便全屏 + D3D 也不算游戏)
 # Process Lasso / NVIDIA Optimus 同款策略: 进程黑名单 + 全屏 D3D
 $Script:NonGameProcesses = @(
@@ -352,6 +374,18 @@ function Test-StartupGuard {
         }
     }
 
+    # 用户可能只用手柄启动/进入游戏，键鼠 idle 很长。真实的非排除全屏 3D
+    # 本身就是明确的交互信号，可以解除开机保护；Wallpaper/浏览器等仍在硬排除列表。
+    $isInteractive3D = $Foreground.IsFs -and $Foreground.IsD3D -and
+        -not ($Script:HardNonGameProcesses -contains $procLower)
+    if ($isInteractive3D) {
+        try { $bootStamp | Out-File -FilePath $releasePath -Encoding ASCII -NoNewline } catch {}
+        return @{
+            Active = $false
+            Reason = "开机保护已解除: 检测到全屏 3D 进程 $($Foreground.Proc).exe pid=$($Foreground.Pid)"
+        }
+    }
+
     if ($IdleSeconds -gt 30 -or ($Script:StartupNeutralProcesses -contains $procLower)) {
         return @{
             Active = $true
@@ -367,12 +401,35 @@ function Test-StartupGuard {
 }
 
 function Test-GameRunning {
+    param(
+        [string]$CurrentMode = 'Idle',
+        [int]$InputIdleSeconds = -1
+    )
+
     $fs = Test-FullscreenD3DApp
-    $idle = [Win32Util]::GetIdleSeconds()
+    $rawIdle = [int][Win32Util]::GetIdleSeconds()
+    $idle = if ($InputIdleSeconds -ge 0) { $InputIdleSeconds } else { $rawIdle }
 
     $startupGuard = Test-StartupGuard -Foreground $fs -IdleSeconds $idle
     if ($startupGuard.Active) {
-        return @{ IsGame = $false; ForceIdle = $true; Reason = $startupGuard.Reason }
+        return @{ IsGame = $false; ForceIdle = $true; Source = 'StartupGuard'; Reason = $startupGuard.Reason }
+    }
+
+    $fgProcLower = $fs.Proc.ToLower()
+    $fgIsGuiApp  = $Script:NonGameProcesses -contains $fgProcLower
+    $fgIsHardNonGame = $Script:HardNonGameProcesses -contains $fgProcLower
+
+    # 已经由强信号进入 Game 后，只要同一个非排除全屏 3D 进程仍在前台，就保持 Game。
+    # 这让暂停菜单、过场、限帧场景以及只用 PS5/Xbox 手柄的低负载阶段不再反复降档。
+    if ($CurrentMode -eq 'Game' -and $fs.IsFs -and $fs.IsD3D -and -not $fgIsHardNonGame) {
+        $holdSample = Get-LoadSamples -Count 1 -IntervalMs 0
+        return @{
+            IsGame = $true
+            Source = 'ConfirmedGameProcess'
+            ProcessName = $fs.Proc
+            ProcessId = $fs.Pid
+            Reason = "已确认游戏进程保持 [$($fs.Proc).exe pid=$($fs.Pid)]，进程仍为全屏 3D；输入空闲 ${idle}s 不覆盖游戏信号; $(Format-LoadSummary $holdSample)"
+        }
     }
 
     # Layer 1: 用户离开判定 (保留, 但加双重确认防止手柄误判)
@@ -381,6 +438,7 @@ function Test-GameRunning {
     if ($idle -gt $Settings.UserIdleSec) {
         if ($quickSample.MinGpu -lt 10 -and $quickSample.MinCoreMax -lt 30 -and $quickSample.MinCpu -lt 20) {
             return @{ IsGame = $false
+                Source = 'IdleLowLoad'
                 Reason = "人离开 ${idle}s + 低负载 ($(Format-LoadSummary $quickSample))" }
         }
     }
@@ -391,21 +449,23 @@ function Test-GameRunning {
 
     # 前台进程是否在 GUI 黑名单 (浏览器/Office/IDE 等)
     # 硬排除列表不会进入 GUI 高负载兜底, 避免浏览器/WebGL/Codex/Steam 大屏幕误判.
-    $fgProcLower = $fs.Proc.ToLower()
-    $fgIsGuiApp  = $Script:NonGameProcesses -contains $fgProcLower
-    $fgIsHardNonGame = $Script:HardNonGameProcesses -contains $fgProcLower
     $topGpuIsHardNonGame = $Script:HardNonGameProcesses -contains $load.TopGpuName
 
     # 层 2: 全屏 + D3D 只是候选; 必须有真实负载才切 Game, 避免 Steam 大屏幕/Codex/软件全屏误判.
     if ($fs.IsFs -and $fs.IsD3D -and -not $fgIsGuiApp) {
-        if ($load.MinGpu -ge 15 -or $load.MinCoreMax -ge 45 -or $load.MinCpu -ge 20) {
+        $foregroundIsTopCpu = ($load.TopCpuPid -eq $fs.Pid -and $load.TopCpuValue -ge 80)
+        if ($load.MinGpu -ge 15 -or $load.MinCoreMax -ge 45 -or $load.MinCpu -ge 20 -or $foregroundIsTopCpu) {
             return @{
                 IsGame = $true
+                Source = 'Fullscreen3DLoad'
+                ProcessName = $fs.Proc
+                ProcessId = $fs.Pid
                 Reason = "全屏3D活跃 [$($fs.Proc).exe pid=$($fs.Pid)] $loadSummary"
             }
         }
         return @{
             IsGame = $false
+            Source = 'Fullscreen3DLowLoad'
             Reason = "全屏3D但低负载 [$($fs.Proc).exe pid=$($fs.Pid)] 不切 Game; $loadSummary"
         }
     }
@@ -414,6 +474,9 @@ function Test-GameRunning {
     if ($fs.IsFs -and $fs.IsD3D -and -not $fgIsHardNonGame -and $load.MinGpu -ge 40 -and $load.MinCoreMax -ge 70) {
         return @{
             IsGame = $true
+            Source = 'FullscreenGuiLoad'
+            ProcessName = $fs.Proc
+            ProcessId = $fs.Pid
             Reason = "GUI全屏高负载 [$($fs.Proc).exe pid=$($fs.Pid)] $loadSummary"
         }
     }
@@ -421,6 +484,7 @@ function Test-GameRunning {
     if ($fgIsHardNonGame) {
         return @{
             IsGame = $false
+            Source = 'HardNonGameForeground'
             Reason = "前台是硬排除 GUI [$($fs.Proc).exe pid=$($fs.Pid)] 不切 Game; $loadSummary"
         }
     }
@@ -430,6 +494,7 @@ function Test-GameRunning {
     if ($fgIsGuiApp) {
         return @{
             IsGame = $false
+            Source = 'NonGameForeground'
             Reason = "前台是 [$($fs.Proc).exe pid=$($fs.Pid)] (黑名单 GUI), 不切 Game; $loadSummary"
         }
     }
@@ -439,6 +504,7 @@ function Test-GameRunning {
     if ($topGpuIsHardNonGame) {
         return @{
             IsGame = $false
+            Source = 'HardNonGameGpu'
             Reason = "GPU 最高进程是后台排除项 [$($load.TopGpuLabel)], 不切 Game; $loadSummary"
         }
     }
@@ -447,6 +513,7 @@ function Test-GameRunning {
     if ($load.MinCoreMax -ge 85) {
         return @{
             IsGame = $true
+            Source = 'CoreLoad'
             Reason = "单核瓶颈: $loadSummary"
         }
     }
@@ -455,6 +522,7 @@ function Test-GameRunning {
     if ($load.MinGpu -ge 50 -and $load.MinCpu -ge 30) {
         return @{
             IsGame = $true
+            Source = 'GpuCpuLoad'
             Reason = "GPU+CPU 高负载: $loadSummary"
         }
     }
@@ -463,12 +531,14 @@ function Test-GameRunning {
     if ($load.MinGpu -ge 70) {
         return @{
             IsGame = $true
+            Source = 'GpuLoad'
             Reason = "GPU 重载: $loadSummary"
         }
     }
 
     return @{
         IsGame = $false
+        Source = 'NoGameSignal'
         Reason = "无游戏信号: fs=$($fs.IsFs) d3d=$($fs.IsD3D) front=$($fs.Proc).exe pid=$($fs.Pid); $loadSummary"
     }
 }
@@ -568,7 +638,8 @@ if ($Mode -eq 'Auto') {
     $missCountPath = Join-Path $PSScriptRoot 'game_miss_count.txt'
     $current = if (Test-Path $statePath) { (Get-Content $statePath -Raw).Trim() } else { 'Idle' }
 
-    $detection = Test-GameRunning
+    $detection = Test-GameRunning -CurrentMode $current -InputIdleSeconds $ActivityIdleSec
+    Write-GameDetectionState -Detection $detection -InputIdleSeconds $ActivityIdleSec
     if ($detection.ForceIdle) {
         $bootStamp = Get-BootStamp
         $guardApplyPath = Join-Path $PSScriptRoot 'boot_guard_idle_applied.txt'

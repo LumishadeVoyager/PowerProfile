@@ -5,8 +5,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkerScript = Join-Path $ScriptDir 'PowerProfile.ps1'
 $StatePath = Join-Path $ScriptDir 'current_mode.txt'
 $AutoEnabledPath = Join-Path $ScriptDir 'auto_enabled.txt'
-$IdleQuietStatePath = Join-Path $ScriptDir 'idle_quiet_state.json'
+$DetectionStatePath = Join-Path $ScriptDir 'game_detection_state.json'
+$LegacyIdleQuietStatePath = Join-Path $ScriptDir 'idle_quiet_state.json'
 $LifecycleLog = Join-Path $ScriptDir 'tray_lifecycle.log'
+$LogicScript = Join-Path $ScriptDir 'PowerProfileLogic.ps1'
+. $LogicScript
 
 function Write-LifecycleLog {
     param([string]$Msg)
@@ -186,77 +189,65 @@ function Get-UserActivityIdleSeconds {
     return [int][Math]::Min($rawIdle, $controllerIdle)
 }
 
-function Read-IdleQuietState {
-    if (-not (Test-Path $IdleQuietStatePath)) {
-        return @{ Active = $false; PreviousMode = '' }
+function Read-GameDetectionState {
+    if (-not (Test-Path $DetectionStatePath)) {
+        return @{ Fresh = $false; IsGame = $false; ForceIdle = $false; Reason = '尚无游戏检测结果' }
     }
     try {
-        $j = Get-Content $IdleQuietStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $j = Get-Content $DetectionStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $observedAt = [DateTime]$j.observedAt
+        $maxAgeSec = [Math]::Max(60, [int]$Script:Settings.autoIntervalSec * 4)
+        $ageSec = [Math]::Abs(((Get-Date).ToUniversalTime() - $observedAt.ToUniversalTime()).TotalSeconds)
         return @{
-            Active = [bool]$j.active
-            PreviousMode = [string]$j.previousMode
+            Fresh = ($ageSec -le $maxAgeSec)
+            IsGame = [bool]$j.isGame
+            ForceIdle = [bool]$j.forceIdle
+            Source = [string]$j.source
+            ProcessName = [string]$j.processName
+            ProcessId = [int]$j.processId
+            Reason = [string]$j.reason
+            AgeSeconds = [int]$ageSec
         }
     } catch {
-        return @{ Active = $false; PreviousMode = '' }
+        return @{ Fresh = $false; IsGame = $false; ForceIdle = $false; Reason = '游戏检测状态不可读' }
     }
-}
-
-function Write-IdleQuietState {
-    param([string]$PreviousMode, [int]$IdleSeconds)
-    $obj = [PSCustomObject]@{
-        active = $true
-        previousMode = $PreviousMode
-        idleSeconds = $IdleSeconds
-        startedAt = (Get-Date).ToString('s')
-    }
-    $json = $obj | ConvertTo-Json -Compress
-    [System.IO.File]::WriteAllText($IdleQuietStatePath, $json, (New-Object System.Text.UTF8Encoding $true))
-}
-
-function Clear-IdleQuietState {
-    Remove-Item $IdleQuietStatePath -ErrorAction SilentlyContinue
 }
 
 function Invoke-GameIdleQuietGuard {
-    param([int]$ActivityIdleSec)
+    param(
+        [int]$ActivityIdleSec,
+        [int]$EffectiveIdleSec
+    )
 
     $thresholdMinutes = [int]$Script:Settings.gameIdleQuietMinutes
     if ($thresholdMinutes -le 0) {
-        Clear-IdleQuietState
         return 'None'
     }
 
     $thresholdSec = $thresholdMinutes * 60
-    $resumeSec = 5
-    $state = Read-IdleQuietState
     $currentMode = Get-CurrentMode
-
-    if ($state.Active) {
-        if ($ActivityIdleSec -le $resumeSec) {
-            $previousMode = if (@('Idle','Balanced','Game') -contains $state.PreviousMode) { $state.PreviousMode } else { 'Game' }
-            Clear-IdleQuietState
-            if ($currentMode -ne $previousMode) {
-                Invoke-Worker -Mode $previousMode -Reason "游戏空闲静音恢复: 检测到鼠标/键盘/手柄输入, 恢复之前模式 $previousMode"
-                Show-ModeToast -Mode $previousMode -SubText '检测到输入 -> 恢复之前模式'
-            }
-            return 'Restored'
-        }
-
-        if ($currentMode -ne 'Idle') {
-            Invoke-Worker -Mode 'Idle' -Reason "游戏空闲静音保持: 鼠标/键盘/手柄无输入 ${ActivityIdleSec}s"
-        }
-        return 'Blocked'
+    $needsDetection = ($currentMode -eq 'Game' -and $ActivityIdleSec -ge $thresholdSec -and $EffectiveIdleSec -ne 0)
+    $detection = if ($needsDetection) {
+        Read-GameDetectionState
+    } else {
+        @{ Fresh = $false; IsGame = $false; Source = '' }
     }
+    $decision = Get-GameIdleQuietDecision `
+        -CurrentMode $currentMode `
+        -ActivityIdleSec $ActivityIdleSec `
+        -ThresholdSec $thresholdSec `
+        -EffectiveIdleSec $EffectiveIdleSec `
+        -Detection $detection
 
-    if ($currentMode -eq 'Game' -and $ActivityIdleSec -ge $thresholdSec) {
-        Write-IdleQuietState -PreviousMode $currentMode -IdleSeconds $ActivityIdleSec
-        Invoke-Worker -Mode 'Idle' -Reason "游戏空闲静音: 鼠标/键盘/手柄无输入 ${ActivityIdleSec}s, 阈值 ${thresholdSec}s"
+    if ($decision -eq 'ForceNoGameSignal') {
+        $reason = "游戏空闲静音: 无有效游戏信号且输入空闲 ${ActivityIdleSec}s, 阈值 ${thresholdSec}s; 最近检测: $($detection.Reason)"
+        Invoke-Worker -Mode 'Idle' -Reason $reason
         $mins = [Math]::Round($ActivityIdleSec / 60.0, 0)
-        Show-ModeToast -Mode 'Idle' -SubText "游戏无输入 ${mins} 分钟 -> 静音"
-        return 'Forced'
+        Show-ModeToast -Mode 'Idle' -SubText "无游戏信号且无输入 ${mins} 分钟 -> 静音"
+        return 'ForcedNoGameSignal'
     }
 
-    return 'None'
+    return $decision
 }
 
 # === Auto 开关状态持久化 ======================================================
@@ -682,9 +673,14 @@ function Get-CurrentMode {
 # 非阻塞调用 worker. 之前 -Wait 会卡 UI 2 秒采样时间; 现在 fire-and-forget,
 # 状态变化由文件监视 timer 检测.
 function Invoke-Worker {
-    param([string]$Mode, [string]$Reason = '')
+    param(
+        [string]$Mode,
+        [string]$Reason = '',
+        [int]$ActivityIdleSec = -1
+    )
     $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WorkerScript, '-Mode', $Mode)
     if ($Reason) { $args += @('-Reason', $Reason) }
+    if ($Mode -eq 'Auto' -and $ActivityIdleSec -ge 0) { $args += @('-ActivityIdleSec', $ActivityIdleSec) }
     Start-Process -FilePath 'powershell.exe' `
         -ArgumentList $args `
         -WindowStyle Hidden
@@ -864,7 +860,7 @@ function Show-Settings {
     $cmbIdle = Add-SettingRow $grpOther '人离开判定' $idleOptions ([double]$work.userIdleSec) 20 70 '空闲超过这个挡位且低负载时保持静音。'
     $cmbToast = Add-SettingRow $grpOther '提示停留' $toastOptions ([double]$work.toastStaySec) 20 104 '托盘提示停留时间。'
     $cmbUnlock = Add-SettingRow $grpOther '恢复 Auto' $unlockOptions ([double]$work.manualUnlockMinutes) 20 138 '手动锁定后空闲多久自动恢复 Auto。'
-    $cmbQuiet = Add-SettingRow $grpOther '游戏空闲静音' $quietOptions ([double]$work.gameIdleQuietMinutes) 20 172 'Game 模式中鼠标/键盘/手柄无输入多久后临时强制静音。'
+    $cmbQuiet = Add-SettingRow $grpOther '游戏空闲静音' $quietOptions ([double]$work.gameIdleQuietMinutes) 20 172 '仅在没有有效游戏进程或负载信号时，无输入多久后切到静音。'
     $cmbExit = Add-SettingRow $grpOther '退出防抖' $exitOptions ([double]$work.gameExitMissCount) 20 206 '游戏结束后连续多少次无游戏才切回静音。'
 
     $y += 264
@@ -1155,7 +1151,7 @@ $Script:AutoTimer.Add_Tick({
     $auto = Get-AutoEnabled
     $idleSec = Get-EffectiveIdle   # 全屏游戏时返回 0, 避免手柄玩游戏被误判 idle
     $activityIdleSec = Get-UserActivityIdleSeconds
-    $quietGuard = Invoke-GameIdleQuietGuard -ActivityIdleSec $activityIdleSec
+    $quietGuard = Invoke-GameIdleQuietGuard -ActivityIdleSec $activityIdleSec -EffectiveIdleSec $idleSec
     $unlockSec = [int]$Script:Settings.manualUnlockMinutes * 60
     try {
         $line = "{0}  auto={1}  idle={2}s  inputIdle={3}s  threshold={4}s  quietGuard={5}  willUnlock={6}" -f `
@@ -1164,10 +1160,12 @@ $Script:AutoTimer.Add_Tick({
         Add-Content -Path $dbg -Value $line -Encoding UTF8
     } catch {}
 
-    if ($quietGuard -ne 'None') { return }
+    # 抑制/延迟静音只代表“本轮不能由 idle 降档”，Auto 检测仍要继续刷新，
+    # 否则游戏退出后检测状态会过期并让模式卡在 Game。只有已经发出 Idle 切换才结束本轮。
+    if (-not (Test-ShouldContinueAutoDetection $quietGuard)) { return }
 
     if ($auto) {
-        Invoke-Worker -Mode 'Auto'
+        Invoke-Worker -Mode 'Auto' -ActivityIdleSec $activityIdleSec
     } else {
         # 手动锁定状态
         $currentMode = Get-CurrentMode
@@ -1177,13 +1175,13 @@ $Script:AutoTimer.Add_Tick({
         # 不恢复 Auto 开关 - 用户仍处于"手动锁定"语义, 但 Game→Idle 单向转换是用户期望.
         # 手动锁定 Idle/Balanced 不跑 worker - 那是用户明确"我现在就要低功耗"
         if ($currentMode -eq 'Game') {
-            Invoke-Worker -Mode 'Auto'
+            Invoke-Worker -Mode 'Auto' -ActivityIdleSec $activityIdleSec
         }
 
         # idle 逃生阀: 不管什么模式, idle 太久都恢复 Auto
         if ($idleSec -ge $unlockSec) {
             Set-AutoEnabled $true
-            Invoke-Worker -Mode 'Auto'
+            Invoke-Worker -Mode 'Auto' -ActivityIdleSec $activityIdleSec
             Update-TrayIcon
             $mins = [Math]::Round($idleSec / 60.0, 0)
             Show-ModeToast -Mode (Get-CurrentMode) -SubText "空闲 ${mins} 分钟 -> 自动恢复"
@@ -1193,7 +1191,8 @@ $Script:AutoTimer.Add_Tick({
 $Script:AutoTimer.Start()
 
 # === 启动 =====================================================================
-if (Get-AutoEnabled) { Invoke-Worker -Mode 'Auto' }
+Remove-Item $LegacyIdleQuietStatePath -ErrorAction SilentlyContinue
+if (Get-AutoEnabled) { Invoke-Worker -Mode 'Auto' -ActivityIdleSec (Get-UserActivityIdleSeconds) }
 Update-TrayIcon
 
 [System.Windows.Forms.Application]::Run()

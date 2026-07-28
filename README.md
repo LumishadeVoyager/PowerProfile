@@ -15,7 +15,9 @@
 ```
 E:\PowerProfile\
 ├── PowerProfile.ps1       # 核心 Worker — 接受 -Mode 参数切换
-├── PowerProfileTray.ps1   # 托盘 GUI + 60s 自动检测
+├── PowerProfileTray.ps1   # 托盘 GUI + 定时自动检测
+├── PowerProfileLogic.ps1  # 无输入静音优先级的纯逻辑
+├── tests\                  # PowerShell 回归测试
 ├── Start-Tray.vbs         # 无窗口启动器
 ├── Install.ps1            # 一键安装 (创建开机自启)
 ├── Uninstall.ps1          # 一键卸载
@@ -45,7 +47,8 @@ E:\PowerProfile\
 - 检测到全屏 3D 且存在真实 CPU/GPU 负载, 或后台持续高负载 → 自动切 **Game** 模式
 - 前台是浏览器、Codex/IDE、Office、Steam 大屏幕、桌面外壳等硬排除 GUI 时, 即使全屏也不会切 **Game** 模式
 - Wallpaper Engine、Edge WebView 和 Windows 开机组件的 GPU 占用不会单独触发 **Game** 模式，且不会提前解除开机静音保护
-- 当前处于 **Game** 模式时, 鼠标/键盘/常见 XInput 手柄超过设置阈值无输入 → 临时强制 **Idle**; 输入恢复后切回之前模式
+- 当前处于 **Game** 模式时, 无输入静音只在“没有有效游戏进程或负载信号”时生效；全屏 3D 游戏、持续负载和已确认游戏进程的优先级更高
+- Xbox/XInput 手柄活动会计入输入时间；PS5/DualSense 即使以原生 HID 方式连接，也由游戏进程与负载信号保护，不会只因键鼠长期未动而降档
 - 游戏退出后连续多次检测不到游戏 → 自动切回 **Idle** 模式
 - 每次真正切换都会在 `profile.log` 记录原因, 包括前台 exe、top CPU/GPU 进程和负载数据
 
@@ -81,7 +84,7 @@ powershell -File E:\PowerProfile\PowerProfile.ps1 -Mode Auto
 - GPU 3D、总 CPU、单核峰值是否持续较高
 - 前台进程或 GPU 最高进程是否属于浏览器、Office、IDE、Steam 大屏幕、Codex、Wallpaper Engine、Edge WebView 等非游戏 GUI 黑名单
 - 开机/锁屏保护是否仍在生效
-- Game 模式中是否超过设定时间没有鼠标/键盘/XInput 手柄输入
+- Game 模式中是否超过设定时间没有鼠标/键盘/XInput 手柄输入，以及当前是否仍存在优先级更高的游戏进程/负载信号
 
 如果某个软件全屏但 CPU/GPU 都很低, 会保持当前模式, 不会只因为全屏 D3D 就切到 Game。
 浏览器、Codex/IDE、Office、Steam 大屏幕、桌面壳、Wallpaper Engine、Edge WebView 等硬排除进程即使全屏高负载也不会切到 Game。
