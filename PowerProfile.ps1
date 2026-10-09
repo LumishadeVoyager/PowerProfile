@@ -46,7 +46,7 @@ $DefaultProfiles = @{
         DisplayName = '均衡'
     }
     Game = @{
-        Boost = 2; Min = 90; Max = 100; FreqMax = 4500
+        Boost = 2; Min = 90; Max = 100; FreqMax = 0
         DisplayName = '游戏'
     }
 }
@@ -561,8 +561,8 @@ function Set-PowerProfile {
     # MHz frequency cap (核类 0 = E-core, 核类 1 = P-core); 0 = 无上限
     Invoke-ProfilePowerCfg -Arguments @('/SETACVALUEINDEX', 'SCHEME_CURRENT', $procSub, $f0Guid, $cfg.FreqMax)
     Invoke-ProfilePowerCfg -Arguments @('/SETDCVALUEINDEX', 'SCHEME_CURRENT', $procSub, $f0Guid, $cfg.FreqMax)
-    Invoke-ProfilePowerCfg -Arguments @('/SETACVALUEINDEX', 'SCHEME_CURRENT', $procSub, $f1Guid, $cfg.FreqMax) -Optional
-    Invoke-ProfilePowerCfg -Arguments @('/SETDCVALUEINDEX', 'SCHEME_CURRENT', $procSub, $f1Guid, $cfg.FreqMax) -Optional
+    Invoke-ProfilePowerCfg -Arguments @('/SETACVALUEINDEX', 'SCHEME_CURRENT', $procSub, $f1Guid, $cfg.FreqMax) -Optional:($Name -ne 'Game')
+    Invoke-ProfilePowerCfg -Arguments @('/SETDCVALUEINDEX', 'SCHEME_CURRENT', $procSub, $f1Guid, $cfg.FreqMax) -Optional:($Name -ne 'Game')
     Invoke-ProfilePowerCfg -Arguments @('/SETACTIVE', 'SCHEME_CURRENT')
 
     # 记录到 log 方便诊断

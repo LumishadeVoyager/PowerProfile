@@ -15,7 +15,7 @@
       "boost": 1
     },
     "Game": {
-      "freqMax": 4500,
+      "freqMax": 0,
       "name": "游戏",
       "min": 90,
       "max": 100,

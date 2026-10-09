@@ -487,7 +487,7 @@ $DefaultSettings = @{
     modes = @{
         Idle     = @{ name = '静音'; freqMax = 1800; boost = 0; min = 50; max = 100 }
         Balanced = @{ name = '均衡'; freqMax = 3500; boost = 1; min = 60; max = 99 }
-        Game     = @{ name = '游戏'; freqMax = 4500; boost = 2; min = 90; max = 100 }
+        Game     = @{ name = '游戏'; freqMax = 0; boost = 2; min = 90; max = 100 }
     }
     autoIntervalSec = 20
     userIdleSec = 90
