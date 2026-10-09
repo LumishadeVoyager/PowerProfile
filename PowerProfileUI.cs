@@ -47,6 +47,8 @@ public sealed class ProfileMetricBar : System.Windows.Forms.Control {
     }
 }
 public static class ProfileSystemStatus {
+    [DllImport("kernel32.dll")] static extern ulong GetTickCount64();
+    public static TimeSpan Uptime() { return TimeSpan.FromMilliseconds(GetTickCount64()); }
     [DllImport("kernel32.dll")] static extern bool GetSystemTimes(out long idle,out long kernel,out long user);
     [StructLayout(LayoutKind.Sequential)] public class MemoryStatus {
         public uint length=(uint)Marshal.SizeOf(typeof(MemoryStatus)); public uint load;

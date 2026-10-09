@@ -3,7 +3,7 @@ function Merge-TelemetryMetrics {
     param($Current,$Previous,$Errors,[DateTime]$Now=[DateTime]::UtcNow)
     $Now=$Now.ToUniversalTime()
     $result=@{schemaVersion=2;observedAt=$Now.ToString('o');fieldStates=@{}}
-    foreach($key in @('cpu','memoryPercent','memoryUsedGB','memoryTotalGB','gpu3d','videoEncode','compute')){
+    foreach($key in @('cpu','cpuFrequencyMHz','memoryPercent','memoryUsedGB','memoryTotalGB','gpu3d','videoEncode','compute')){
         $value=$Current[$key]
         if($null -ne $value){$result[$key]=$value;$result.fieldStates[$key]=@{state='fresh';observedAt=$Now.ToString('o');reason=''}}
         else{
@@ -16,6 +16,14 @@ function Merge-TelemetryMetrics {
         }
     }
     return $result
+}
+function Get-CpuFrequencyEstimate {
+    param($Sample)
+    $nominal=[double]$Sample.ProcessorFrequency
+    $performance=[double]$Sample.PercentProcessorPerformance
+    $mhz=$nominal*$performance/100.0
+    if($nominal -le 0 -or $performance -le 0 -or [double]::IsNaN($mhz) -or [double]::IsInfinity($mhz) -or $mhz -gt 15000){throw '系统没有返回有效的 CPU 频率与性能计数器'}
+    return [Math]::Round($mhz)
 }
 function Get-GpuMetricValues {
     param($Samples)

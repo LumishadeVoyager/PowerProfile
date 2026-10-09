@@ -27,4 +27,13 @@ $samples[2].CookedValue=9e13
 $gpu=Get-GpuMetricValues $samples
 Assert-Equal 'bad encode does not clear valid 3D' $gpu.values.gpu3d 20
 Assert-Equal 'invalid counter reports its reason' ($gpu.errors.videoEncode.Length -gt 0) $true
+Assert-Equal 'current frequency reflects performance rather than fixed nominal clock' (Get-CpuFrequencyEstimate ([PSCustomObject]@{ProcessorFrequency=2600;PercentProcessorPerformance=80})) 2080
+Assert-Equal 'boost frequency is not clamped to nominal clock' (Get-CpuFrequencyEstimate ([PSCustomObject]@{ProcessorFrequency=2600;PercentProcessorPerformance=150})) 3900
+$failed=$false
+try{Get-CpuFrequencyEstimate ([PSCustomObject]@{ProcessorFrequency=2600;PercentProcessorPerformance=$null})}catch{$failed=$true}
+Assert-Equal 'missing frequency counter is rejected instead of faking nominal speed' $failed $true
+$frequencyPrevious=[PSCustomObject]@{observedAt=$now.ToString('o');cpuFrequencyMHz=2080;fieldStates=@{cpuFrequencyMHz=@{observedAt=$now.ToString('o');state='fresh'}}}
+$frequencyStale=Merge-TelemetryMetrics @{} $frequencyPrevious @{cpuFrequencyMHz='读取失败'} $now.AddSeconds(10)
+Assert-Equal 'frequency failure retains honest stale value' $frequencyStale.fieldStates.cpuFrequencyMHz.state 'stale'
+Assert-Equal 'frequency last good timestamp does not advance on failure' $frequencyStale.fieldStates.cpuFrequencyMHz.observedAt $frequencyPrevious.observedAt
 Write-Host 'All telemetry tests passed.'

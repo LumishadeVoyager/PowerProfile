@@ -93,13 +93,26 @@ function Update-ModernDashboard {
     $Script:DashboardTip.SetToolTip($fields.reason,[string]$d.Reason)
     $idleSeconds=Get-UserActivityIdleSeconds
     $fields.idle.Text="$([int][Math]::Floor($idleSeconds/60)) 分 $($idleSeconds%60) 秒 · 含远程输入"
-    $fields.limit.Text=if($Script:Settings.modes.ContainsKey($mode)){Format-Freq $Script:Settings.modes[$mode].freqMax}else{'--'}
+    $limit=if($Script:Settings.modes.ContainsKey($mode)){$Script:Settings.modes[$mode].freqMax}else{$null}
+    $fields.limit.Text=if($null -eq $limit){'--'}elseif($limit -eq 0){'不设额外频率上限'}else{('{0:N2} GHz' -f ($limit/1000.0))}
+    $fields.mode.ForeColor=[Drawing.Color]::FromArgb(36,124,112)
+    if($mode -eq 'Game'){$fields.mode.ForeColor=[Drawing.Color]::FromArgb(151,75,83)}
+    elseif($mode -eq 'Balanced'){$fields.mode.ForeColor=[Drawing.Color]::FromArgb(39,106,159)}
+    $power=[Windows.Forms.SystemInformation]::PowerStatus
+    $fields.power.Text=switch([string]$power.PowerLineStatus){'Online'{'已接电 · 交流电'};'Offline'{if($power.BatteryLifePercent -ge 0){'电池供电 · '+[Math]::Round(100*$power.BatteryLifePercent)+'%'}else{'电池供电'}};default{'供电状态未知'}}
+    $uptime=[ProfileSystemStatus]::Uptime()
+    $fields.uptime.Text="$(if($uptime.Days){"$($uptime.Days) 天 "})$($uptime.Hours) 小时 $($uptime.Minutes) 分钟"
     $fields.plan.Text='附加省电：等待检测'
     try{
         $ws=Read-AtomicJson (Join-Path $ScriptDir 'workstation_state.json')
         $age=([DateTime]::UtcNow-([DateTime]$ws.observedAt).ToUniversalTime()).TotalSeconds
         $fields.plan.Text=if($age -gt 45){'附加省电：检测过期，等待恢复检查'}else{"附加省电：$(if($ws.active){'已生效'}else{'未生效'}) · $($ws.reason)"}
-        if($ws.active){$fields.limit.Text="$($ws.freqMax) MHz（附加限制）"}
+        if($ws.active -and $mode -eq 'Idle'){
+            $fields.mode.Text="工作站省电 · $(if(Get-AutoEnabled){'自动'}else{'手动锁定'})"
+            $fields.mode.ForeColor=[Drawing.Color]::FromArgb(39,106,159)
+            $fields.plan.Text="基础档位：静音 · $($fields.plan.Text)"
+            $fields.limit.Text=('{0:N2} GHz · 工作站附加上限' -f ($ws.freqMax/1000.0))
+        }
     }catch{}
     $Script:DashboardTip.SetToolTip($fields.plan,$fields.plan.Text)
     $j=$null
@@ -107,6 +120,16 @@ function Update-ModernDashboard {
         $j=Read-AtomicJson (Join-Path $ScriptDir 'system_status.json')
         $age=([DateTime]::UtcNow-([DateTime]$j.observedAt).ToUniversalTime()).TotalSeconds
     } catch {$age=999999}
+    $fields.hardware.Text=if($j.hardware.cpuName){$j.hardware.cpuName}else{'运行状态 · 按需系统监测'}
+    $Script:DashboardTip.SetToolTip($fields.hardware,"$($j.hardware.cpuName)`r`n$($j.hardware.cores) 核心 / $($j.hardware.logicalProcessors) 逻辑处理器")
+    $frequency=$j.cpuFrequencyMHz;$frequencyState=$j.fieldStates.cpuFrequencyMHz
+    $frequencyAge=999999
+    if($frequencyState.observedAt){try{$frequencyAge=([DateTime]::UtcNow-([DateTime]$frequencyState.observedAt).ToUniversalTime()).TotalSeconds}catch{}}
+    $frequencyValid=$null -ne $frequency -and $frequencyAge -ge 0 -and $frequencyAge -le 60
+    $frequencyStale=$frequencyValid -and ($frequencyAge -gt 15 -or $frequencyState.state -eq 'stale')
+    $fields.frequency.Text=if($frequencyValid){('{0:N2} GHz{1}' -f ($frequency/1000.0),$(if($frequencyStale){' · 旧值'}else{''}))}else{'等待采样'}
+    $fields.frequency.ForeColor=if($frequencyValid -and -not $frequencyStale){[Drawing.Color]::FromArgb(39,106,159)}else{[Drawing.Color]::FromArgb(133,142,150)}
+    $Script:DashboardTip.SetToolTip($fields.frequency,"Windows 标称频率 × Processor Performance 的总体估算；不同核心频率可能不同，不是逐核心硬件测频。`r`n采样时间：$($frequencyState.observedAt)`r`n$($frequencyState.reason)")
     $degraded=$false
     foreach($pair in @(@('cpu','cpu'),@('gpu','gpu3d'),@('video','videoEncode'),@('compute','compute'),@('memory','memoryPercent'))) {
         $key=$pair[0];$metric=$pair[1];$v=$j.$metric;$metadata=$j.fieldStates.$metric
@@ -123,41 +146,44 @@ function Update-ModernDashboard {
         $Script:DashboardTip.SetToolTip($fields[$key],$hint);$Script:DashboardTip.SetToolTip($bar,$hint)
         if($stale -or -not $valid){$degraded=$true}
     }
-    if($null -ne $j.memoryUsedGB -and $age -le 60){$fields.memory.Text+=" · $($j.memoryUsedGB) GB";$Script:DashboardTip.SetToolTip($fields.memory,"已用 $($j.memoryUsedGB) GB / 总计 $($j.memoryTotalGB) GB")}
+    if($null -ne $j.memoryUsedGB -and $age -le 60){$fields.memory.Text+=" · $($j.memoryUsedGB) / $($j.memoryTotalGB) GB";$Script:DashboardTip.SetToolTip($fields.memory,"已用 $($j.memoryUsedGB) GB / 总计 $($j.memoryTotalGB) GB")}
     $fields.updated.Text=if($age -le 15){"更新 $(([DateTime]$j.observedAt).ToLocalTime().ToString('HH:mm:ss'))$(if($j.stage -eq 'gpu-loading'){' · GPU 刷新中'}elseif($degraded){' · 部分指标有说明'})"}else{'采样延迟 · 正在自动重试'}
 }
 function Show-ModernDashboard {
     if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.WindowState='Normal';$Script:Dashboard.Show();[ProfileVisual]::ActivateDashboard($Script:Dashboard.Handle);$Script:Dashboard.Activate();return}
     $form=New-Object Windows.Forms.Form
-    Initialize-ModernForm $form 'PowerProfile · 运行状态' 480 524
+    Initialize-ModernForm $form 'PowerProfile · 运行状态' 500 640
     $form.ShowInTaskbar=$true
     $fields=@{};$bars=@{}
     $accent=New-Object Windows.Forms.Panel;$accent.BackColor=[Drawing.Color]::FromArgb(39,106,159);$accent.SetBounds(18,20,4,49);$form.Controls.Add($accent)
     $fields.mode=New-ModernLabel '' 34 17 425
     $fields.mode.Height=32;$fields.mode.Font=New-Object Drawing.Font 'Microsoft YaHei UI',14,([Drawing.FontStyle]::Bold)
-    $subtitle=New-ModernLabel '运行状态 · 按需系统监测' 34 51 410;$subtitle.ForeColor=[Drawing.Color]::FromArgb(111,122,132)
+    $subtitle=New-ModernLabel '运行状态 · 按需系统监测' 34 51 445;$subtitle.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$subtitle.AutoEllipsis=$true;$fields.hardware=$subtitle
     $fields.reason=New-ModernLabel '' 18 82 443;$fields.reason.AutoEllipsis=$true
     $form.Controls.Add($fields.mode);$form.Controls.Add($subtitle);$form.Controls.Add($fields.reason)
-    $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds(12,116,456,195);$form.Controls.Add($card)
-    $y=12
+    $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds(12,116,476,235);$form.Controls.Add($card)
+    $card.Controls.Add((New-ModernLabel 'CPU 当前频率 · 估算' 14 15 185))
+    $fields.frequency=New-ModernLabel '等待采样' 235 8 225;$fields.frequency.Height=34;$fields.frequency.TextAlign='TopRight';$fields.frequency.Font=New-Object Drawing.Font 'Segoe UI',18,([Drawing.FontStyle]::Bold);$card.Controls.Add($fields.frequency)
+    $divider=New-Object Windows.Forms.Panel;$divider.BackColor=[Drawing.Color]::FromArgb(234,239,242);$divider.SetBounds(14,47,448,1);$card.Controls.Add($divider)
+    $y=61
     foreach($row in @(@('CPU','cpu'),@('GPU 3D','gpu'),@('视频编码','video'),@('GPU 计算','compute'),@('内存','memory'))){
         $caption=New-ModernLabel $row[0] 14 $y 87;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118)
-        $bar=New-Object ProfileMetricBar;$bar.SetBounds(107,($y+5),185,10);$bar.ForeColor=[Drawing.Color]::FromArgb(39,106,159)
-        $value=New-ModernLabel '--' 299 $y 141;$value.TextAlign='TopRight'
+        $bar=New-Object ProfileMetricBar;$bar.SetBounds(107,($y+5),128,10);$bar.ForeColor=[Drawing.Color]::FromArgb(39,106,159)
+        $value=New-ModernLabel '--' 240 $y 220;$value.TextAlign='TopRight'
         $card.Controls.Add($caption);$card.Controls.Add($bar);$card.Controls.Add($value)
-        $fields[$row[1]]=$value;$bars[$row[1]]=$bar;$y+=36
+        $fields[$row[1]]=$value;$bars[$row[1]]=$bar;$y+=32
     }
-    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,325,456,151);$form.Controls.Add($details)
-    foreach($row in @(@('CPU 频率上限','limit',13),@('无输入时长','idle',47))){
+    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,365,476,227);$form.Controls.Add($details)
+    foreach($row in @(@('配置频率上限','limit',13),@('键鼠未输入','idle',47),@('供电状态','power',81),@('连续运行','uptime',115))){
         $caption=New-ModernLabel $row[0] 14 $row[2] 120;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118)
-        $value=New-ModernLabel '--' 135 $row[2] 305;$value.TextAlign='TopRight'
+        $value=New-ModernLabel '--' 135 $row[2] 325;$value.TextAlign='TopRight'
         $details.Controls.Add($caption);$details.Controls.Add($value);$fields[$row[1]]=$value
     }
-    $fields.plan=New-ModernLabel '' 14 83 428;$fields.plan.Height=38;$fields.plan.AutoEllipsis=$true;$details.Controls.Add($fields.plan)
-    $stable=New-ModernLabel '稳定参数保留 · C-state 不作更改' 14 124 428;$stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$details.Controls.Add($stable)
-    $fields.updated=New-ModernLabel '' 18 492 273;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
-    $log=New-Object Windows.Forms.Button;$log.Text='查看日志';$log.SetBounds(292,485,82,29);$log.FlatStyle='Flat';$log.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($log);$log.Add_Click({Show-ModernLogViewer})
-    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(384,485,78,29);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
+    $fields.plan=New-ModernLabel '' 14 149 448;$fields.plan.Height=38;$fields.plan.AutoEllipsis=$true;$details.Controls.Add($fields.plan)
+    $stable=New-ModernLabel '稳定参数保留 · C-state 不作更改' 14 197 448;$stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$details.Controls.Add($stable)
+    $fields.updated=New-ModernLabel '' 18 615 273;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
+    $log=New-Object Windows.Forms.Button;$log.Text='查看日志';$log.SetBounds(312,606,82,29);$log.FlatStyle='Flat';$log.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($log);$log.Add_Click({Show-ModernLogViewer})
+    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(404,606,78,29);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
     $close.Add_Click({$Script:Dashboard.Close()})
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=5000
     $timer.Add_Tick({try{Invoke-TelemetrySample;Update-ModernDashboard}catch{Write-ProfileEvent 'ui.dashboard.refresh.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace}}})

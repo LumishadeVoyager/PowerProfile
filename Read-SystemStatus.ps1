@@ -22,7 +22,21 @@ try{
     foreach($key in @('cpu','memoryPercent','memoryUsedGB','memoryTotalGB')){$errors[$key]=$_.Exception.Message}
     Write-ProfileEvent 'telemetry.native.failed' $_.Exception.Message 'WARN'
 }
-$partial=Merge-TelemetryMetrics $current $previous @{gpu3d='GPU 正在采样';videoEncode='GPU 正在采样';compute='GPU 正在采样'}
+try {
+    $frequency=Get-CimInstance Win32_PerfFormattedData_Counters_ProcessorInformation -Filter "Name='_Total'" -OperationTimeoutSec 3 -ErrorAction Stop
+    # ProcessorFrequency alone can be the nominal clock, not the operating clock.
+    $current.cpuFrequencyMHz=Get-CpuFrequencyEstimate $frequency
+} catch {$errors.cpuFrequencyMHz='CPU 频率读取失败：'+$_.Exception.Message}
+$hardware=$previous.hardware
+if(-not $hardware.cpuName){
+    try {
+        $processors=@(Get-CimInstance Win32_Processor -OperationTimeoutSec 3 -ErrorAction Stop)
+        $hardware=@{cpuName=($processors.Name -join ' / ');cores=($processors | Measure-Object NumberOfCores -Sum).Sum;logicalProcessors=($processors | Measure-Object NumberOfLogicalProcessors -Sum).Sum}
+    } catch {$hardware=@{cpuName='';cores=$null;logicalProcessors=$null}}
+}
+$partialErrors=@{gpu3d='GPU 正在采样';videoEncode='GPU 正在采样';compute='GPU 正在采样';cpuFrequencyMHz=$errors.cpuFrequencyMHz}
+$partial=Merge-TelemetryMetrics $current $previous $partialErrors
+$partial.hardware=$hardware
 foreach($key in @('gpu3d','videoEncode','compute')){if($previous.fieldStates.$key -and ($null -ne $partial[$key] -or $null -eq $previous.$key)){$partial.fieldStates[$key]=$previous.fieldStates.$key}}
 $partial.stage='gpu-loading'
 $stage='publish-partial'
@@ -36,10 +50,11 @@ try{
 }catch{foreach($key in @('gpu3d','videoEncode','compute')){$errors[$key]='GPU 计数器读取失败：'+$_.Exception.Message}}
 $stage='merge-final'
 $result=Merge-TelemetryMetrics $current $previous $errors
+$result.hardware=$hardware
 $stage='publish-final'
 Write-AtomicJson (Join-Path $PSScriptRoot 'system_status.json') $result
 $changed=@()
-foreach($key in @('cpu','memoryPercent','gpu3d','videoEncode','compute')){
+foreach($key in @('cpu','cpuFrequencyMHz','memoryPercent','gpu3d','videoEncode','compute')){
     $state=$result.fieldStates[$key].state
     if($state -ne $previous.fieldStates.$key.state -and ($previous.fieldStates.$key -or $state -ne 'fresh')){$changed+=@{metric=$key;state=$state;reason=$result.fieldStates[$key].reason}}
 }

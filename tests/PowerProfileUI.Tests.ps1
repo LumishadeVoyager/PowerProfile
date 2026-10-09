@@ -40,6 +40,36 @@ try {
     Assert-Equal 'second click restores hidden dashboard' $Script:Dashboard.Visible $true
     Assert-Equal 'dashboard displays actual mode source' $Script:Dashboard.Tag.Fields.mode.Text '静音 · 自动'
     Assert-Equal 'dashboard displays detection reason' $Script:Dashboard.Tag.Fields.reason.Text 'fixture game detection'
+    # Render each actual mode and overlay state with isolated telemetry, without changing power.
+    $ScriptDir=$testRoot
+    $stamp=[DateTime]::UtcNow.ToString('o')
+    Write-AtomicJson (Join-Path $testRoot 'system_status.json') @{observedAt=$stamp;cpu=12;cpuFrequencyMHz=2350;memoryPercent=51;memoryUsedGB=16.2;memoryTotalGB=31.7;hardware=@{cpuName='Fixture CPU';cores=14;logicalProcessors=20};fieldStates=@{cpuFrequencyMHz=@{state='fresh';observedAt=$stamp}}}
+    Write-AtomicJson (Join-Path $testRoot 'workstation_state.json') @{active=$false;observedAt=$stamp;reason='等待离开 20 分钟'}
+    Update-ModernDashboard
+    Assert-Equal 'current frequency is distinct from configured limit' $Script:Dashboard.Tag.Fields.frequency.Text '2.35 GHz'
+    Assert-Equal 'dashboard shows configured quiet limit' $Script:Dashboard.Tag.Fields.limit.Text '1.80 GHz'
+    Assert-Equal 'dashboard shows used and total memory' ($Script:Dashboard.Tag.Fields.memory.Text.Contains('16.2 / 31.7 GB')) $true
+    Assert-Equal 'dashboard shows CPU identity' $Script:Dashboard.Tag.Fields.hardware.Text 'Fixture CPU'
+    Assert-Equal 'dashboard shows power and uptime' ([bool]$Script:Dashboard.Tag.Fields.power.Text -and [bool]$Script:Dashboard.Tag.Fields.uptime.Text) $true
+    Write-AtomicJson (Join-Path $testRoot 'workstation_state.json') @{active=$true;observedAt=$stamp;freqMax=1500;reason='满足省电条件'}
+    Update-ModernDashboard
+    Assert-Equal 'active overlay gets prominent mode name' $Script:Dashboard.Tag.Fields.mode.Text '工作站省电 · 自动'
+    Assert-Equal 'active overlay displays its own limit' $Script:Dashboard.Tag.Fields.limit.Text '1.50 GHz · 工作站附加上限'
+    Assert-Equal 'active overlay explains its base profile' ($Script:Dashboard.Tag.Fields.plan.Text.Contains('基础档位：静音')) $true
+    function Get-CurrentMode{return 'Game'}
+    $Script:Settings.modes.Game.freqMax=0
+    Update-ModernDashboard
+    Assert-Equal 'game profile wins over incompatible overlay snapshot' $Script:Dashboard.Tag.Fields.mode.Text '游戏 · 自动'
+    Assert-Equal 'zero configured limit is explained rather than shown as zero GHz' $Script:Dashboard.Tag.Fields.limit.Text '不设额外频率上限'
+    function Get-CurrentMode{return 'Balanced'}
+    Update-ModernDashboard
+    Assert-Equal 'balanced profile is clearly identified' $Script:Dashboard.Tag.Fields.mode.Text '均衡 · 自动'
+    $expired=[DateTime]::UtcNow.AddMinutes(-2).ToString('o')
+    Write-AtomicJson (Join-Path $testRoot 'system_status.json') @{observedAt=$stamp;cpuFrequencyMHz=2350;fieldStates=@{cpuFrequencyMHz=@{state='stale';observedAt=$expired}}}
+    Update-ModernDashboard
+    Assert-Equal 'expired frequency is not shown as current' $Script:Dashboard.Tag.Fields.frequency.Text '等待采样'
+    function Get-CurrentMode{return 'Idle'}
+    $ScriptDir=$project
     $timer=$Script:Dashboard.Tag.Timer
     $form=$Script:Dashboard
     $form.Close();[Windows.Forms.Application]::DoEvents()
