@@ -38,6 +38,13 @@ try{
  $form.SelectSearch('');[Windows.Forms.Application]::DoEvents()
  Assert-Equal 'clearing search restores complete timeline' $form.VisibleRecordCount 4
  $form.Close();$form.Dispose()
+ $parent=@{timestamp=$date.ToUniversalTime().AddMinutes(1).ToString('o');event='telemetry.failed';operationId='tray-session';data=@{childOperationId='sample-1'};message='采样失败';level='WARN'}
+ $child=@{timestamp=$date.ToUniversalTime().AddMinutes(1).AddSeconds(1).ToString('o');event='telemetry.exception';operationId='sample-1';data=@{stage='publish-final';stack='fixture stack'};message='文件被占用';level='ERROR'}
+ [IO.File]::AppendAllText($file,(($parent|ConvertTo-Json -Depth 5 -Compress)+[Environment]::NewLine+($child|ConvertTo-Json -Depth 5 -Compress)+[Environment]::NewLine),(New-Object Text.UTF8Encoding $false))
+ $records=[ProfileLogViewer]::ReadRecords((Join-Path $root 'logs'),$date,[ref]$skipped)
+ $sampleChain=[ProfileLogViewer]::ConnectedOperations($records,'sample-1')
+ Assert-Equal 'sampler failure follows its child operation' $records[4].Operation 'sample-1'
+ Assert-Equal 'sampler correlation does not merge every tray operation' ($sampleChain.Contains('tray-session')) $false
 }finally{
  $full=[IO.Path]::GetFullPath($root);$prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\PowerProfileLogViewerTests-'
  if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe cleanup path'}

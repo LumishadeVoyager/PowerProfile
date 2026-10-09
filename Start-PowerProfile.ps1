@@ -1,6 +1,7 @@
 ﻿param([ValidateSet('Modern','Legacy','Selected')][string]$Version='Selected')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'PowerProfileVersion.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileDetection.ps1')
 # An already-authorized highest-privilege login task can service a one-shot version switch.
 # The request accepts only the two fixed versions, never a command or arbitrary path.
 $requestPath=Join-Path $PSScriptRoot 'tray_switch_request.txt'
@@ -12,7 +13,7 @@ if(Test-Path $requestPath){
 if ($Version -eq 'Selected') { $Version=Get-SelectedTrayVersion $PSScriptRoot }
 if ($Version -eq 'Legacy') {
     $statePath=Join-Path $PSScriptRoot 'workstation_state.json'
-    if((Test-Path $statePath) -and (Get-Content $statePath -Raw -Encoding UTF8 | ConvertFrom-Json).active){Start-TrayVersionSwitch $PSScriptRoot 'Legacy';return}
+    if((Test-Path $statePath) -and (Read-AtomicJson $statePath).active){Start-TrayVersionSwitch $PSScriptRoot 'Legacy';return}
     Initialize-LegacyConfiguration $PSScriptRoot
 }
 $tray=Get-TrayVersionPath $PSScriptRoot $Version

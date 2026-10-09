@@ -3,8 +3,18 @@
     $Script:ProfileLogRoot=$Root
     $Script:ProfileLogComponent=$Component
     $Script:ProfileOperationId=if($OperationId){$OperationId}else{[Guid]::NewGuid().ToString()}
-    $Script:ProfileBuildHash=if(Test-Path (Join-Path $Root 'PowerProfile.ps1')){(Get-FileHash (Join-Path $Root 'PowerProfile.ps1') -Algorithm SHA256).Hash}else{''}
-    $Script:ProfileSettingsHash=if(Test-Path (Join-Path $Root 'settings.json')){(Get-FileHash (Join-Path $Root 'settings.json') -Algorithm SHA256).Hash}else{''}
+    $Script:ProfileBuildHash=Get-ProfileFileHash (Join-Path $Root 'PowerProfile.ps1')
+    $Script:ProfileSettingsHash=Get-ProfileFileHash (Join-Path $Root 'settings.json')
+}
+function Get-ProfileFileHash {
+    param([string]$Path)
+    $stream=$null;$hash=$null
+    try {
+        $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        $hash=[Security.Cryptography.SHA256]::Create()
+        return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-','')
+    } catch { return '' }
+    finally {if($stream){$stream.Dispose()};if($hash){$hash.Dispose()}}
 }
 function Write-ProfileEvent {
     param([string]$Event,[string]$Message,[ValidateSet('INFO','WARN','ERROR')][string]$Level='INFO',$Data=@{})

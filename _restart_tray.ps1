@@ -31,7 +31,7 @@ function Start-CheckedTray {
     $deadline=[DateTime]::UtcNow.AddSeconds(20)
     while ([DateTime]::UtcNow -lt $deadline -and -not $p.HasExited) {
         if (Test-Path $ready) {
-            try { $j=Get-Content $ready -Raw | ConvertFrom-Json; if ($j.processId -eq $p.Id -and $j.version -eq $SelectedVersion) { return $p } } catch {}
+            try { $j=Read-AtomicJson $ready; if ($j.processId -eq $p.Id -and $j.version -eq $SelectedVersion) { return $p } } catch {}
         }
         Start-Sleep -Milliseconds 250
     }

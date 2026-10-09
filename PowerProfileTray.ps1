@@ -179,7 +179,7 @@ function Read-GameDetectionState {
         return @{ Fresh = $false; IsGame = $false; ForceIdle = $false; Reason = '尚无游戏检测结果' }
     }
     try {
-        $j = Get-Content $DetectionStatePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $j = Read-AtomicJson $DetectionStatePath
         $observedAt = [DateTime]$j.observedAt
         $maxAgeSec = [Math]::Max(60, [int]$Script:Settings.autoIntervalSec * 4)
         $ageSec = [Math]::Abs(((Get-Date).ToUniversalTime() - $observedAt.ToUniversalTime()).TotalSeconds)
@@ -515,7 +515,7 @@ function Read-Settings {
     }
     if (Test-Path $SettingsPath) {
         try {
-            $j = Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $j = Read-AtomicJson $SettingsPath
             if ($j.modes) {
                 foreach ($k in 'Idle','Balanced','Game') {
                     $m = $j.modes.$k
@@ -557,7 +557,7 @@ function Save-Settings {
     # Preserve advanced/local rules when the GUI edits only its own fields.
     if (Test-Path -LiteralPath $SettingsPath) {
         try {
-            $existing = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $existing = Read-AtomicJson $SettingsPath
             foreach ($property in $existing.PSObject.Properties) {
                 if ($property.Name -notin @($obj.PSObject.Properties.Name)) {
                     $obj | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
@@ -1019,17 +1019,17 @@ $menu.Items.Insert(0,$menuMonitor)
 $menuWorkstation=$menu.Items.Add('工作时段附加省电')
 $menuPauseWorkstation=$menu.Items.Add('暂停附加省电到今天结束')
 $menuWorkstation.Add_Click({
-    $options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    $options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
     Save-WorkstationOptions (-not $options.enabled) $options.freqMax ''
     Invoke-WorkstationWorker -Restore
 })
 $menuPauseWorkstation.Add_Click({
-    $options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    $options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
     Save-WorkstationOptions $options.enabled $options.freqMax (Get-BeijingTime).Date.AddDays(1).ToString('s')
     Invoke-WorkstationWorker -Restore
 })
 $menu.Add_Opening({
-    try{$options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json);$menuWorkstation.Checked=$options.enabled}catch{}
+    try{$options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath);$menuWorkstation.Checked=$options.enabled}catch{}
 })
 
 $menuLog = $menu.Items.Add('打开日志')
@@ -1209,16 +1209,16 @@ $Script:WorkstationTimer.Add_Tick({
     try {
         $active=$false
         $wsPath=Join-Path $ScriptDir 'workstation_state.json'
-        if(Test-Path $wsPath){$active=[bool](Get-Content $wsPath -Raw -Encoding UTF8 | ConvertFrom-Json).active}
+        if(Test-Path $wsPath){$active=[bool](Read-AtomicJson $wsPath).active}
         if($active -and ((Get-UserActivityIdleSeconds) -lt 1200 -or -not (Get-AutoEnabled))){Invoke-WorkstationWorker -Restore -RestoreReason '本机或远程输入，或用户退出自动调节';return}
         if(-not $active -and ((Get-UserActivityIdleSeconds) -lt 1200 -or -not (Get-AutoEnabled) -or (Get-CurrentMode) -ne 'Idle')){return}
-        $options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        $options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
         if(-not $active -and -not $options.enabled){return}
         if(([DateTime]::UtcNow-$Script:LastWorkstationCheck).TotalSeconds -ge 10){
             $Script:LastWorkstationCheck=[DateTime]::UtcNow
             Invoke-WorkstationWorker
         }
-    } catch {Write-ProfileEvent 'workstation.timer.failed' $_.Exception.Message 'ERROR'}
+    } catch {Write-ProfileEvent 'workstation.timer.failed' $_.Exception.Message 'ERROR' @{path=$wsPath;stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage}}
 })
 $Script:WorkstationTimer.Start()
 

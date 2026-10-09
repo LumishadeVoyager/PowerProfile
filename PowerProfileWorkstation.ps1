@@ -142,7 +142,7 @@ function Restore-WorkstationOverlay {
     param([string]$Root,[string]$Reason='恢复原参数')
     $path=Join-Path $Root 'workstation_state.json'
     if(-not (Test-Path -LiteralPath $path)){return}
-    $state=Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $state=Read-AtomicJson $path
     if(-not $state.active){return}
     if($state.baseline.scheme -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'){throw 'Invalid recovery scheme'}
     Write-ProfileEvent 'workstation.restore.start' $Reason -Data @{enteredBy=$state.operationId;baseline=$state.baseline}
@@ -165,12 +165,12 @@ function Invoke-WorkstationEvaluation {
     param([string]$Root,[string]$CurrentMode,$DetectionOptions)
     $path=Join-Path $Root 'workstation_state.json'
     $previous=$null
-    if(Test-Path $path){$previous=Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json}
-    $json=Get-Content (Join-Path $Root 'settings.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if(Test-Path $path){$previous=Read-AtomicJson $path}
+    $json=Read-AtomicJson (Join-Path $Root 'settings.json')
     $options=Get-WorkstationOptions $json
     $now=Get-BeijingTime
     $calendar=$null
-    try{$calendar=Get-Content (Join-Path $Root "workdays.$($now.Year).json") -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json}catch{}
+    try{$calendar=Read-AtomicJson (Join-Path $Root "workdays.$($now.Year).json")}catch{}
     $autoPath=Join-Path $Root 'auto_enabled.txt'
     $auto=(-not (Test-Path $autoPath)) -or (Get-Content $autoPath -Raw).Trim() -eq 'true'
     if(-not ('WorkstationNative' -as [type])){Add-Type -Path (Join-Path $Root 'PowerProfileWorkstation.cs')}
@@ -198,7 +198,7 @@ function Invoke-WorkstationEvaluation {
     $reason=Get-WorkstationReason $code
     if($code -in @('GamePresent','ProtectedProcess') -and $safety.Process){$reason+='：'+$safety.Process}
     if($code -eq 'SafetyUnavailable' -and $safety.UnknownProcesses){$reason+='：无法读取 '+($safety.UnknownProcesses -join ', ')}
-    if($code -ne 'Eligible' -and $previous.active){Restore-WorkstationOverlay $Root $reason;$previous=Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json}
+    if($code -ne 'Eligible' -and $previous.active){Restore-WorkstationOverlay $Root $reason;$previous=Read-AtomicJson $path}
     $state=@{active=[bool]$previous.active;code=$code;reason=$reason;observedAt=[DateTime]::UtcNow.ToString('o');idleSeconds=$idle;freqMax=$freq;operationId=$Script:ProfileOperationId;safety=$safety;lastQuietAt=$null;quietSince=$null;baseline=$previous.baseline}
     if($code -in @('ConfirmingQuiet','Eligible')){
         $state.lastQuietAt=[DateTime]::UtcNow.ToString('o')

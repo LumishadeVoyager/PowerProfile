@@ -22,15 +22,19 @@ function Read-DetectionOptions {
 
 function Write-AtomicJson {
     param([string]$Path, $Value, [switch]$Pretty)
-    $temporary = "$Path.$PID.tmp"
-    try {
-        $json = ConvertTo-Json -InputObject $Value -Depth 10 -Compress:(-not $Pretty)
-        [IO.File]::WriteAllText($temporary, $json, (New-Object Text.UTF8Encoding $true))
-        if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temporary, $Path, [NullString]::Value) }
-        else { [IO.File]::Move($temporary, $Path) }
-    } finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-    }
+    Initialize-SnapshotIO
+    $json = ConvertTo-Json -InputObject $Value -Depth 10 -Compress:(-not $Pretty)
+    [ProfileSnapshotIO]::Write($Path, $json)
+}
+
+function Initialize-SnapshotIO {
+    if (-not ('ProfileSnapshotIO' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'PowerProfileFileIO.cs') }
+}
+
+function Read-AtomicJson {
+    param([string]$Path)
+    Initialize-SnapshotIO
+    [ProfileSnapshotIO]::Read($Path) | ConvertFrom-Json
 }
 
 function Get-InstalledGameRoots {
@@ -80,7 +84,7 @@ function Get-InstalledGameRoots {
         $manifests = Join-Path $env:ProgramData 'Epic\EpicGamesLauncher\Data\Manifests'
         foreach ($manifest in @(Get-ChildItem -LiteralPath $manifests -Filter '*.item' -File -ErrorAction SilentlyContinue)) {
             try {
-                $item = Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json
+                $item = Read-AtomicJson $manifest.FullName
                 if ($item.InstallLocation -and $item.LaunchExecutable -and (Test-Path -LiteralPath $item.InstallLocation -PathType Container)) {
                     $roots += [PSCustomObject]@{ Path = [IO.Path]::GetFullPath($item.InstallLocation); Name = $item.DisplayName; Source = 'Epic' }
                 }
@@ -126,7 +130,7 @@ function Get-SessionGameDetection {
     $sessionPath = Join-Path $StateDirectory 'game_session_state.json'
     $now = [DateTime]::UtcNow
     $session = $null
-    try { $session = Get-Content -LiteralPath $sessionPath -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
+    try { $session = Read-AtomicJson $sessionPath } catch {}
     $identities = @()
     $foregroundIdentity = Get-ProcessIdentity -ProcessId $Foreground.Pid
     if ($foregroundIdentity) { $identities += $foregroundIdentity }

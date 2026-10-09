@@ -19,3 +19,4 @@ jobs:
           & .\tests\PowerProfileWorkstation.Tests.ps1
           & .\tests\PowerProfileTelemetry.Tests.ps1
           & .\tests\PowerProfileLogViewer.Tests.ps1
+          & .\tests\PowerProfileFileIO.Tests.ps1

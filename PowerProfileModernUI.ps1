@@ -1,6 +1,7 @@
 ﻿Add-Type -Path (Join-Path $ScriptDir 'PowerProfileUI.cs') -ReferencedAssemblies System.Drawing,System.Windows.Forms
 . (Join-Path $ScriptDir 'PowerProfileVersion.ps1')
 . (Join-Path $ScriptDir 'PowerProfileWorkstation.ps1')
+. (Join-Path $ScriptDir 'PowerProfileDetection.ps1')
 . (Join-Path $ScriptDir 'PowerProfileLog.ps1')
 $Script:ModernFont=New-Object Drawing.Font 'Microsoft YaHei UI',9
 $Script:Dashboard=$null
@@ -10,12 +11,12 @@ $Script:DashboardTip=New-Object Windows.Forms.ToolTip
 
 function Get-ModernUIOptions {
     $o=@{toastEnabled=$true}
-    try { $j=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json; if($j.ui.toastEnabled -is [bool]){$o.toastEnabled=$j.ui.toastEnabled} } catch {}
+    try { $j=Read-AtomicJson $SettingsPath; if($j.ui.toastEnabled -is [bool]){$o.toastEnabled=$j.ui.toastEnabled} } catch {}
     return $o
 }
 function Save-WorkstationOptions {
     param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='')
-    $json=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $json=Read-AtomicJson $SettingsPath
     $minimum=[int]$json.modes.Idle.min
     $base=[int]$json.processorBaseMHz
     if($Enabled -and ($base -le 0 -or $Frequency -lt 500 -or $Frequency -ge $json.modes.Idle.freqMax -or [Math]::Floor(100*$Frequency/$base) -lt $minimum+5)){throw '频率必须低于静音档，且保持原最低处理器比例；请先校准基频。'}
@@ -23,7 +24,7 @@ function Save-WorkstationOptions {
     foreach($pair in @(@('enabled',$Enabled),@('freqMax',$Frequency),@('awayMinutes',20),@('pausedUntil',$PausedUntil))){$w | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force}
     $json | Add-Member -NotePropertyName workstation -NotePropertyValue $w -Force
     Write-AtomicJson $SettingsPath $json -Pretty
-    $Script:ProfileSettingsHash=(Get-FileHash $SettingsPath -Algorithm SHA256).Hash
+    $Script:ProfileSettingsHash=Get-ProfileFileHash $SettingsPath
     Write-ProfileEvent 'settings.workstation.saved' '保存附加省电配置' -Data @{enabled=$Enabled;freqMax=$Frequency;awayMinutes=20;pausedUntil=$PausedUntil}
 }
 function Open-ModernDashboard {
@@ -62,10 +63,11 @@ function Invoke-TelemetrySample {
         $Script:TelemetryProcess.Kill()
         Write-ProfileEvent 'telemetry.timeout' '只读采样超过 15 秒，已终止并重新采样' 'WARN'
     }
-    if($Script:TelemetryProcess -and $Script:TelemetryProcess.HasExited -and $Script:TelemetryProcess.ExitCode -ne 0){Write-ProfileEvent 'telemetry.failed' '只读采样进程失败，将重试' 'WARN' @{exitCode=$Script:TelemetryProcess.ExitCode}}
+    if($Script:TelemetryProcess -and $Script:TelemetryProcess.HasExited -and $Script:TelemetryProcess.ExitCode -ne 0){Write-ProfileEvent 'telemetry.failed' '只读采样进程失败，将重试；请按关联操作查阅具体异常' 'WARN' @{exitCode=$Script:TelemetryProcess.ExitCode;childOperationId=$Script:TelemetryOperationId}}
     if($Script:TelemetryProcess){$Script:TelemetryProcess.Dispose()}
     $Script:TelemetryStarted=[DateTime]::UtcNow
-    $Script:TelemetryProcess=Start-HiddenPowerShell @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $ScriptDir 'Read-SystemStatus.ps1')))
+    $Script:TelemetryOperationId=[Guid]::NewGuid().ToString()
+    $Script:TelemetryProcess=Start-HiddenPowerShell @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $ScriptDir 'Read-SystemStatus.ps1')),'-OperationId',$Script:TelemetryOperationId)
 }
 function Show-ModernLogViewer {
     param([string]$Search='')
@@ -94,7 +96,7 @@ function Update-ModernDashboard {
     $fields.limit.Text=if($Script:Settings.modes.ContainsKey($mode)){Format-Freq $Script:Settings.modes[$mode].freqMax}else{'--'}
     $fields.plan.Text='附加省电：等待检测'
     try{
-        $ws=Get-Content (Join-Path $ScriptDir 'workstation_state.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+        $ws=Read-AtomicJson (Join-Path $ScriptDir 'workstation_state.json')
         $age=([DateTime]::UtcNow-([DateTime]$ws.observedAt).ToUniversalTime()).TotalSeconds
         $fields.plan.Text=if($age -gt 45){'附加省电：检测过期，等待恢复检查'}else{"附加省电：$(if($ws.active){'已生效'}else{'未生效'}) · $($ws.reason)"}
         if($ws.active){$fields.limit.Text="$($ws.freqMax) MHz（附加限制）"}
@@ -102,7 +104,7 @@ function Update-ModernDashboard {
     $Script:DashboardTip.SetToolTip($fields.plan,$fields.plan.Text)
     $j=$null
     try {
-        $j=Get-Content (Join-Path $ScriptDir 'system_status.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+        $j=Read-AtomicJson (Join-Path $ScriptDir 'system_status.json')
         $age=([DateTime]::UtcNow-([DateTime]$j.observedAt).ToUniversalTime()).TotalSeconds
     } catch {$age=999999}
     $degraded=$false
@@ -190,7 +192,7 @@ function Show-ModernSettings {
     $legacy=New-Object Windows.Forms.Button;$legacy.Text='切换为旧版';$legacy.SetBounds(18,181,180,32);$general.Controls.Add($legacy)
     $legacy.Add_Click({Start-TrayVersionSwitch $ScriptDir 'Legacy'})
     $general.Controls.Add((New-ModernLabel '旧版代码与上线前配置独立保存，可随时返回。' 18 232 410))
-    $w=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    $w=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
     $enabled=New-Object Windows.Forms.CheckBox;$enabled.Text='启用工作时段附加省电';$enabled.Checked=$w.enabled;$enabled.SetBounds(18,15,370,26);$plan.Controls.Add($enabled)
     $plan.Controls.Add((New-ModernLabel 'CPU 上限（MHz）' 18 55 180))
     $frequency=New-Object Windows.Forms.NumericUpDown;$frequency.Minimum=500;$frequency.Maximum=10000;$frequency.Increment=100;$frequency.Value=$w.freqMax;$frequency.SetBounds(230,55,140,26);$plan.Controls.Add($frequency)
@@ -205,7 +207,7 @@ function Show-ModernSettings {
     $save=New-Object Windows.Forms.Button;$save.Text='保存';$save.SetBounds(368,350,100,30);$form.Controls.Add($save)
     $save.Add_Click({
         try {
-            $json=if(Test-Path $SettingsPath){Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json}else{[PSCustomObject]@{}}
+            $json=if(Test-Path $SettingsPath){Read-AtomicJson $SettingsPath}else{[PSCustomObject]@{}}
             $ui=if($json.ui){$json.ui}else{[PSCustomObject]@{}}
             $ui | Add-Member -NotePropertyName toastEnabled -NotePropertyValue $toast.Checked -Force
             $json | Add-Member -NotePropertyName ui -NotePropertyValue $ui -Force

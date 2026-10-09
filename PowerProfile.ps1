@@ -72,7 +72,7 @@ function Read-Settings {
     }
     if (Test-Path $path) {
         try {
-            $json = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            $json = Read-AtomicJson $path
             $result.Detection = Read-DetectionOptions $json.detection
             if ($json.modes) {
                 foreach ($k in 'Idle','Balanced','Game') {
@@ -518,7 +518,7 @@ function Set-PowerProfile {
     # 根据 freqMax 自动算 PROCTHROTTLEMAX 兜底
     $pcoreBase = 0
     try {
-        $localSettings = Get-Content (Join-Path $PSScriptRoot 'settings.json') -Raw | ConvertFrom-Json
+        $localSettings = Read-AtomicJson (Join-Path $PSScriptRoot 'settings.json')
         $baseOverride = $localSettings.processorBaseMHz -as [int]
         if ($baseOverride -ge 500 -and $baseOverride -le 10000) { $pcoreBase = $baseOverride }
     } catch {}

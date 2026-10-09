@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Text;
 using System.Drawing;
@@ -36,7 +36,7 @@ public sealed class ProfileLogRecord {
         b.Append(new string(' ',indent)).AppendLine(value==null?"--":value.ToString());
     }
     static string FieldTitle(string key) {
-        var names=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase){{"mode","档位"},{"before","原档位"},{"after","目标档位"},{"freqMax","频率上限 MHz"},{"frequency","频率上限 MHz"},{"maxPercent","最大处理器比例 %"},{"minimum","最小处理器比例 %"},{"maximum","最大处理器比例 %"},{"reason","原因"},{"baseline","恢复快照"},{"safety","负载与进程证据"},{"active","附加省电生效"},{"code","规则代码"},{"observedAt","采样时间 UTC"},{"idleSeconds","无输入秒数"},{"inputIdleSeconds","无输入秒数"},{"operationId","操作编号"},{"enteredBy","进入时的操作编号"},{"Known","安全数据可信"},{"Game","游戏进程存在"},{"Protected","保护软件存在"},{"Process","阻止进程"},{"Cpu","CPU 总占用 %"},{"ProcessCpu","最高单进程 CPU %"},{"SingleCore","最高单进程一核算力 %"},{"Gpu","最忙 GPU 引擎 %"},{"TopCpuProcess","最高 CPU 进程"},{"stack","异常堆栈"},{"position","代码位置"},{"workerPid","执行进程 PID"},{"source","判断来源"}};
+        var names=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase){{"mode","档位"},{"before","原档位"},{"after","目标档位"},{"freqMax","频率上限 MHz"},{"frequency","频率上限 MHz"},{"maxPercent","最大处理器比例 %"},{"minimum","最小处理器比例 %"},{"maximum","最大处理器比例 %"},{"reason","原因"},{"baseline","恢复快照"},{"safety","负载与进程证据"},{"active","附加省电生效"},{"code","规则代码"},{"observedAt","采样时间 UTC"},{"idleSeconds","无输入秒数"},{"inputIdleSeconds","无输入秒数"},{"operationId","操作编号"},{"enteredBy","进入时的操作编号"},{"Known","安全数据可信"},{"Game","游戏进程存在"},{"Protected","保护软件存在"},{"Process","阻止进程"},{"Cpu","CPU 总占用 %"},{"ProcessCpu","最高单进程 CPU %"},{"SingleCore","最高单进程一核算力 %"},{"Gpu","最忙 GPU 引擎 %"},{"TopCpuProcess","最高 CPU 进程"},{"stack","异常堆栈"},{"position","代码位置"},{"workerPid","执行进程 PID"},{"source","判断来源"},{"stage","失败阶段"},{"path","相关文件"},{"exceptionType","异常类型"},{"exitCode","进程退出码"},{"childOperationId","关联采样操作编号"}};
         string name;return names.TryGetValue(key,out name)?name+" ("+key+")":key;
     }
 }
@@ -156,6 +156,7 @@ public sealed class ProfileLogViewer : Form {
             object dataObject;var data=d.TryGetValue("data",out dataObject)?dataObject as Dictionary<string,object>:null;
             string ev=ProfileLogRecord.Text(d,"event"),operation=ProfileLogRecord.Text(d,"operationId");
             if(ev=="worker.request"||ev=="workstation.restore.request"){string child=ProfileLogRecord.Text(data,"operationId");if(child!="")operation=child;}
+            if(ev=="telemetry.failed"){string child=ProfileLogRecord.Text(data,"childOperationId");if(child!="")operation=child;}
             string related=ProfileLogRecord.Text(data,"enteredBy");
             if(related==""&&ev=="workstation.decision"){var parent=ProfileLogRecord.Text(data,"operationId");if(parent!=operation)related=parent;}
             result.Add(new ProfileLogRecord{Record=d,Raw=entry[0],Source=entry[1],Timestamp=ProfileLogRecord.Text(d,"timestamp"),Time=ProfileLogRecord.Text(d,"localTime"),Level=ProfileLogRecord.Text(d,"level"),Event=ev,Message=ProfileLogRecord.Text(d,"message"),Operation=operation,Related=related});
