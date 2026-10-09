@@ -41,6 +41,14 @@ try {
     Assert-Equal 'second click restores hidden dashboard' $Script:Dashboard.Visible $true
     Assert-Equal 'dashboard displays actual mode source' $Script:Dashboard.Tag.Fields.mode.Text '静音 · 自动'
     Assert-Equal 'dashboard displays detection reason' $Script:Dashboard.Tag.Fields.reason.Text 'fixture game detection'
+    Assert-Equal 'merged energy card exists' ($Script:Dashboard.Tag.Fields.ContainsKey('watts')) $true
+    Assert-Equal 'unconfigured energy never displays demo watts' $Script:Dashboard.Tag.Fields.watts.Text '-- W'
+    Show-EnergyDetails
+    Assert-Equal 'energy details visible' $Script:EnergyDetails.Visible $true
+    Assert-Equal 'unconfigured switch is disabled' $Script:EnergyDetails.Tag.Fields.switch.Enabled $false
+    Assert-Equal 'unconfigured chart has no fake data points' $Script:EnergyDetails.Tag.Chart.Points.Count 0
+    $Script:EnergyDetails.Close()
+    Assert-Equal 'closing details releases window only' ($null -eq $Script:EnergyDetails -and $null -ne $Script:EnergyService) $true
     # Render each actual mode and overlay state with isolated telemetry, without changing power.
     $ScriptDir=$testRoot
     $stamp=[DateTime]::UtcNow.ToString('o')

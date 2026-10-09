@@ -36,6 +36,7 @@ foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProf
 }
 . (Join-Path $ScriptDir 'PowerProfileVersion.ps1')
 foreach($name in @('PowerProfileTelemetry.ps1','PowerProfileLogViewer.cs')){if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
+foreach($name in @('PowerProfileEnergy.cs','PowerProfileEnergyUI.ps1','PowerProfileFileIO.cs')){if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 Initialize-LegacyConfiguration $ScriptDir
 
 # 3. 测试 Worker 脚本

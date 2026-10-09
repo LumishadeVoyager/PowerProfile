@@ -19,3 +19,5 @@ tray_switch_request.txt
 workstation_state.json
 tray_ui_request.txt
 logs/
+energy.settings.json
+energy.history.json

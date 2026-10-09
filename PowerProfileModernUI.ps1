@@ -8,6 +8,7 @@ $Script:Dashboard=$null
 $Script:TelemetryProcess=$null
 $Script:LogViewer=$null
 $Script:DashboardTip=New-Object Windows.Forms.ToolTip
+. (Join-Path $ScriptDir 'PowerProfileEnergyUI.ps1')
 
 function Get-ModernUIOptions {
     $o=@{toastEnabled=$true}
@@ -160,11 +161,13 @@ function Update-ModernDashboard {
     }
     if($null -ne $j.memoryUsedGB -and $age -le 60){$fields.memory.Text+=" · $($j.memoryUsedGB) / $($j.memoryTotalGB) GB";$Script:DashboardTip.SetToolTip($fields.memory,"已用 $($j.memoryUsedGB) GB / 总计 $($j.memoryTotalGB) GB")}
     $fields.updated.Text=if($age -le 15){"更新 $(([DateTime]$j.observedAt).ToLocalTime().ToString('HH:mm:ss'))$(if($j.stage -eq 'gpu-loading'){' · GPU 刷新中'}elseif($degraded){' · 部分指标有说明'})"}else{'采样延迟 · 正在自动重试'}
+    Update-EnergySummary
 }
 function Show-ModernDashboard {
     if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.WindowState='Normal';$Script:Dashboard.Show();[ProfileVisual]::ActivateDashboard($Script:Dashboard.Handle);$Script:Dashboard.Activate();return}
+    try {Initialize-EnergyService} catch {Write-ProfileEvent 'energy.start.failed' '用电模块暂不可用；继续显示系统状态' 'WARN'}
     $form=New-Object Windows.Forms.Form
-    Initialize-ModernForm $form 'PowerProfile · 运行状态' 500 640
+    Initialize-ModernForm $form 'PowerProfile · 运行状态' 500 740
     $form.ShowInTaskbar=$true
     $fields=@{};$bars=@{}
     $accent=New-Object Windows.Forms.Panel;$accent.BackColor=[Drawing.Color]::FromArgb(39,106,159);$accent.SetBounds(18,20,4,49);$form.Controls.Add($accent)
@@ -185,17 +188,26 @@ function Show-ModernDashboard {
         $card.Controls.Add($caption);$card.Controls.Add($bar);$card.Controls.Add($value)
         $fields[$row[1]]=$value;$bars[$row[1]]=$bar;$y+=32
     }
-    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,365,476,227);$form.Controls.Add($details)
-    foreach($row in @(@('配置频率上限','limit',13),@('键鼠未输入','idle',47),@('供电状态','power',81),@('连续运行','uptime',115))){
+    $energy=New-Object Windows.Forms.Panel;$energy.BackColor=[Drawing.Color]::White;$energy.SetBounds(12,365,476,124);$form.Controls.Add($energy)
+    $energy.Controls.Add((New-ModernLabel '电脑用电' 14 11 170))
+    $fields.energyStatus=New-ModernLabel '未连接' 250 11 210;$fields.energyStatus.TextAlign='TopRight';$fields.energyStatus.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$energy.Controls.Add($fields.energyStatus)
+    foreach($row in @(@('当前功率','watts',14),@('今日估算用电','energyToday',167),@('今日估算电费','energyFee',320))){
+        $caption=New-ModernLabel $row[0] $row[2] 43 143;$caption.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$energy.Controls.Add($caption)
+        $value=New-ModernLabel '--' $row[2] 68 143;$value.Font=New-Object Drawing.Font 'Microsoft YaHei UI',11,([Drawing.FontStyle]::Bold);$energy.Controls.Add($value);$fields[$row[1]]=$value
+    }
+    $source=New-ModernLabel '米家智能插座 3 · 连接后实际采样' 14 99 280;$source.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$source.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$energy.Controls.Add($source)
+    $energyLink=New-Object Windows.Forms.LinkLabel;$energyLink.Text='用电详情 →';$energyLink.Font=$Script:ModernFont;$energyLink.SetBounds(352,97,110,25);$energyLink.LinkColor=[Drawing.Color]::FromArgb(39,106,159);$energy.Controls.Add($energyLink);$energyLink.Add_LinkClicked({try{Show-EnergyDetails}catch{Write-ProfileEvent 'ui.energy.open.failed' $_.Exception.GetBaseException().Message 'ERROR';[void][Windows.Forms.MessageBox]::Show('用电详情暂时无法打开，请查看日志。','PowerProfile')}})
+    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,501,476,193);$form.Controls.Add($details)
+    foreach($row in @(@('配置频率上限','limit',13),@('键鼠未输入','idle',41),@('供电状态','power',69),@('连续运行','uptime',97))){
         $caption=New-ModernLabel $row[0] 14 $row[2] 120;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118)
         $value=New-ModernLabel '--' 135 $row[2] 325;$value.TextAlign='TopRight'
         $details.Controls.Add($caption);$details.Controls.Add($value);$fields[$row[1]]=$value
     }
-    $fields.plan=New-ModernLabel '' 14 149 448;$fields.plan.Height=38;$fields.plan.AutoEllipsis=$true;$details.Controls.Add($fields.plan)
-    $stable=New-ModernLabel '稳定参数保留 · C-state 不作更改' 14 197 448;$stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$details.Controls.Add($stable)
-    $fields.updated=New-ModernLabel '' 18 615 273;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
-    $log=New-Object Windows.Forms.Button;$log.Text='查看日志';$log.SetBounds(312,606,82,29);$log.FlatStyle='Flat';$log.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($log);$log.Add_Click({Show-ModernLogViewer})
-    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(404,606,78,29);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
+    $fields.plan=New-ModernLabel '' 14 125 448;$fields.plan.Height=35;$fields.plan.AutoEllipsis=$true;$details.Controls.Add($fields.plan)
+    $stable=New-ModernLabel '稳定参数保留 · C-state 不作更改' 14 163 448;$stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$details.Controls.Add($stable)
+    $fields.updated=New-ModernLabel '' 18 712 273;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
+    $log=New-Object Windows.Forms.Button;$log.Text='查看日志';$log.SetBounds(312,704,82,29);$log.FlatStyle='Flat';$log.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($log);$log.Add_Click({Show-ModernLogViewer})
+    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(404,704,78,29);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
     $close.Add_Click({$Script:Dashboard.Close()})
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=5000
     $timer.Add_Tick({try{Invoke-TelemetrySample;Update-ModernDashboard}catch{Write-ProfileEvent 'ui.dashboard.refresh.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace}}})
@@ -212,6 +224,9 @@ function Show-ModernDashboard {
     $timer.Start();$form.TopMost=$true;$form.Show();[ProfileVisual]::ActivateDashboard($form.Handle);$form.Activate();$form.TopMost=$false
 }
 
+# A configured meter continues accumulating while the dashboard is closed.
+try {Initialize-EnergyService} catch {Write-ProfileEvent 'energy.start.failed' '用电模块无法启动；原电源控制继续运行' 'ERROR' @{reason=$_.Exception.GetBaseException().Message}}
+
 function Show-ModernSettings {
     param([switch]$ReturnForm)
     $form=New-Object Windows.Forms.Form
@@ -224,7 +239,7 @@ function Show-ModernSettings {
     $form.Controls.Add($tabs)
     $toast=New-Object Windows.Forms.CheckBox;$toast.Text='切换时显示简短提示';$toast.Checked=(Get-ModernUIOptions).toastEnabled;$toast.SetBounds(18,18,350,26);$general.Controls.Add($toast)
     $general.Controls.Add((New-ModernLabel '托盘左键：运行状态；右键：快捷菜单' 18 58 405))
-    $general.Controls.Add((New-ModernLabel '关闭状态窗口后，系统采样停止。' 18 90 405))
+    $general.Controls.Add((New-ModernLabel '关闭窗口停止 CPU/GPU 采样；已连接插座继续累计。' 18 90 405))
     $advanced=New-Object Windows.Forms.Button;$advanced.Text='档位与自动检测设置...';$advanced.SetBounds(18,132,240,32);$general.Controls.Add($advanced)
     $advanced.Add_Click({Show-Settings})
     $legacy=New-Object Windows.Forms.Button;$legacy.Text='切换为旧版';$legacy.SetBounds(18,181,180,32);$general.Controls.Add($legacy)
