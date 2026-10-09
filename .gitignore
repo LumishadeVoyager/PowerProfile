@@ -16,3 +16,6 @@ tray_ready.json
 system_status.json
 switch_result.json
 tray_switch_request.txt
+workstation_state.json
+tray_ui_request.txt
+logs/

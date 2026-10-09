@@ -4,6 +4,15 @@ using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 public static class ProfileVisual {
     [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+    public static void ActivateDashboard(IntPtr window) {
+        // STARTUPINFO/SW_HIDE from the hidden PowerShell host can hide the first Form.Show().
+        ShowWindow(window,9);
+        ShowWindow(window,5);
+        SetForegroundWindow(window);
+    }
     public static Icon CreateIcon(string mode) {
         Color color=mode=="Game" ? Color.FromArgb(151,75,83) : mode=="Balanced" ? Color.FromArgb(39,106,159) : Color.FromArgb(36,124,112);
         using(Bitmap bitmap=new Bitmap(64,64)) {

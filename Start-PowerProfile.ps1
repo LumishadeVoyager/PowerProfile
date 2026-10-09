@@ -10,7 +10,11 @@ if(Test-Path $requestPath){
     if($requested -in @('Modern','Legacy')){Start-TrayVersionSwitch $PSScriptRoot $requested;return}
 }
 if ($Version -eq 'Selected') { $Version=Get-SelectedTrayVersion $PSScriptRoot }
-if ($Version -eq 'Legacy') { Initialize-LegacyConfiguration $PSScriptRoot }
+if ($Version -eq 'Legacy') {
+    $statePath=Join-Path $PSScriptRoot 'workstation_state.json'
+    if((Test-Path $statePath) -and (Get-Content $statePath -Raw -Encoding UTF8 | ConvertFrom-Json).active){Start-TrayVersionSwitch $PSScriptRoot 'Legacy';return}
+    Initialize-LegacyConfiguration $PSScriptRoot
+}
 $tray=Get-TrayVersionPath $PSScriptRoot $Version
 if (-not (Test-Path $tray)) { throw "Missing tray: $tray" }
 try { & $tray }

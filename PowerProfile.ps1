@@ -6,6 +6,9 @@ param(
     [string]$Reason = '',
 
     [int]$ActivityIdleSec = -1,
+    [switch]$WorkstationOnly,
+    [switch]$RestoreWorkstation,
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$OperationId='',
 
     # Read-only: no powercfg calls or runtime state writes.
     [switch]$Diagnose
@@ -13,18 +16,22 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PowerProfileDetection.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileLog.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileWorkstation.ps1')
+if(-not $Diagnose){Initialize-ProfileLogging $PSScriptRoot 'worker' $OperationId}
 
 # Serialize CLI, tray and settings workers. Auto skips overlaps; manual changes wait.
 $workerMutex = New-Object Threading.Mutex($false, 'Global\PowerProfile_Worker')
 $workerAcquired = $false
 try {
-    try { $workerAcquired = $workerMutex.WaitOne($(if ($Mode -eq 'Auto' -and -not $Diagnose) { 0 } else { 30000 })) }
+    try { $workerAcquired = $workerMutex.WaitOne($(if ($Mode -eq 'Auto' -and -not $Diagnose -and -not $RestoreWorkstation) { 0 } else { 30000 })) }
     catch [Threading.AbandonedMutexException] { $workerAcquired = $true }
     if (-not $workerAcquired) {
-        if ($Mode -ne 'Auto' -or $Diagnose) { throw 'PowerProfile worker is busy; command was not executed.' }
+        if ($Mode -ne 'Auto' -or $Diagnose -or $RestoreWorkstation) { throw 'PowerProfile worker is busy; command was not executed.' }
         Write-Host '[AUTO] Previous worker still running; skipped overlapping sample.'
         return
     }
+    if($RestoreWorkstation){Restore-WorkstationOverlay $PSScriptRoot $(if($Reason){$Reason}else{'用户请求恢复原参数'});return}
 
 
 # === Mode Definitions =========================================================
@@ -250,7 +257,7 @@ function Get-LoadSamples {
                     }
                 }
             }
-            $gpuVals += [math]::Min($sumGpu, 100)
+            $gpuVals += [math]::Min([double]$sumGpu, 100.0)
             $cpuVals += $cpuTotal
             $coreMaxVals += $coreMax
         } catch {}
@@ -265,7 +272,7 @@ function Get-LoadSamples {
         } catch {}
     }
     $processGpu = @{}
-    foreach ($key in $gpuByPid.Keys) { $processGpu[$key] = [Math]::Min(100, $gpuByPid[$key] / [Math]::Max(1, $Count)) }
+    foreach ($key in $gpuByPid.Keys) { $processGpu[$key] = [Math]::Min(100.0, [double]$gpuByPid[$key] / [Math]::Max(1, $Count)) }
     $topGpuPid = 0
     $topGpuAvg = 0
     $topGpuName = ''
@@ -273,7 +280,7 @@ function Get-LoadSamples {
         $topGpu = $gpuByPid.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 1
         if ($topGpu) {
             $topGpuPid = [int]$topGpu.Key
-            $topGpuAvg = [math]::Min(100, [double]$topGpu.Value / [Math]::Max(1, $Count))
+            $topGpuAvg = [math]::Min(100.0, [double]$topGpu.Value / [Math]::Max(1, $Count))
         }
     }
     if ($topGpuPid -gt 0) {
@@ -487,6 +494,8 @@ function Set-PowerProfile {
         [string]$Reason = ''
     )
 
+    Restore-WorkstationOverlay $PSScriptRoot '档位切换，先撤销附加省电'
+    Write-ProfileEvent 'profile.apply.start' $Reason -Data @{mode=$Name;settings=$Profiles[$Name]}
     $cfg = $Profiles[$Name]
     if (-not $cfg) { throw "未知模式: $Name" }
     if ($cfg.Min -lt 0 -or $cfg.Min -gt 100 -or $cfg.Max -lt 5 -or $cfg.Max -gt 100 -or
@@ -576,9 +585,15 @@ function Set-PowerProfile {
         (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Name, $cfg.Boost, $cfg.FreqMax, `
         $throttleMin, $throttleMax, $epp, $autonomous, $Reason
     Add-Content -Path $logPath -Value $logLine -Encoding UTF8
+    Write-ProfileEvent 'profile.apply.success' $Reason -Data @{mode=$Name;frequency=$cfg.FreqMax;minimum=$throttleMin;maximum=$throttleMax;boost=$cfg.Boost;epp=$epp;autonomous=$autonomous}
 }
 
 # === Main =====================================================================
+if($WorkstationOnly -and -not $Diagnose){
+    $current=if(Test-Path (Join-Path $PSScriptRoot 'current_mode.txt')){(Get-Content (Join-Path $PSScriptRoot 'current_mode.txt') -Raw).Trim()}else{'Unknown'}
+    Invoke-WorkstationEvaluation $PSScriptRoot $current $Settings.Detection
+    return
+}
 if ($Diagnose) {
     $diagnostic = Test-GameRunning -InputIdleSeconds $ActivityIdleSec
     [PSCustomObject]@{ detection = $diagnostic; options = $Settings.Detection; gameRoots = @(Get-InstalledGameRoots $Settings.Detection) } | ConvertTo-Json -Depth 7
@@ -596,6 +611,7 @@ if ($Mode -eq 'Auto') {
         [void][int]::TryParse(((Get-Content $missCountPath -Raw -ErrorAction SilentlyContinue) -as [string]), [ref]$miss)
     }
     $transition = Get-AutoModeTransition $current $detection $miss $Settings.GameExitMissCount
+    Write-ProfileEvent 'auto.decision' $detection.Reason -Data @{before=$current;after=$transition.Mode;missCount=$transition.MissCount;source=$detection.Source;process=$detection.ProcessName;processId=$detection.ProcessId;inputIdleSeconds=$ActivityIdleSec}
     $needsApply = $transition.Mode -ne $current
     if ($detection.ForceIdle) {
         $bootStamp = Get-BootStamp
@@ -609,6 +625,7 @@ if ($Mode -eq 'Auto') {
     }
     [string]$transition.MissCount | Out-File $missCountPath -Encoding ASCII -NoNewline
     Write-Host "[AUTO] mode=$($transition.Mode) miss=$($transition.MissCount)/$($Settings.GameExitMissCount) ($($detection.Reason))"
+    Invoke-WorkstationEvaluation $PSScriptRoot $transition.Mode $Settings.Detection
 } else {
     $manualReason = if ($Reason) { $Reason } else { "手动切换: 命令行参数 -Mode $Mode" }
     Set-PowerProfile -Name $Mode -Reason $manualReason
@@ -618,6 +635,8 @@ if ($Mode -eq 'Auto') {
 } catch {
     $message = "{0} PID={1} mode={2} {3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $PID, $Mode, $_.Exception.Message
     if (-not $Diagnose) {
+        Write-ProfileEvent 'worker.failed' $_.Exception.Message 'ERROR' @{mode=$Mode;exception=$_.Exception.GetType().FullName;stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage}
+        try{Restore-WorkstationOverlay $PSScriptRoot '检测或执行失败，撤销附加省电'}catch{Write-ProfileEvent 'workstation.restore.failed' $_.Exception.Message 'ERROR'}
         try { Add-Content (Join-Path $PSScriptRoot 'worker_error.log') -Value $message -Encoding UTF8 } catch {}
     }
     throw

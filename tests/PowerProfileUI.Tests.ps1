@@ -12,8 +12,9 @@ try {
     'corrupt' | Set-Content (Join-Path $testRoot 'tray_version.txt')
     Assert-Equal 'invalid selector fails to known version' (Get-SelectedTrayVersion $testRoot) 'Modern'
     Assert-Equal 'legacy path is independent' (Get-TrayVersionPath $project Legacy) (Join-Path $project 'legacy\PowerProfileTray.ps1')
-    foreach($file in @('PowerProfile.ps1','PowerProfileLogic.ps1','PowerProfileDetection.ps1')) {
-        Assert-Equal "legacy core preserved: $file" (Get-FileHash (Join-Path $project $file)).Hash (Get-FileHash (Join-Path $project ('legacy\'+$file))).Hash
+    $legacyHashes=@{'PowerProfile.ps1'='EB027A874BB108818278CF186398C7E6D2C359FD3E53E2B8667B0891EF30A2CC';'PowerProfileLogic.ps1'='CB77219C7FBC41807DB823D9DFD237D1FFBC73C73E0531C4891FB8260D8FBE0F';'PowerProfileDetection.ps1'='764BE1BDAFD2064189EAD87FC3ED11C1D124A8EF48C44B45D7759024F261219D'}
+    foreach($file in $legacyHashes.Keys) {
+        Assert-Equal "legacy core preserved: $file" (Get-FileHash (Join-Path $project ('legacy\'+$file))).Hash $legacyHashes[$file]
     }
     $ScriptDir=$project;$SettingsPath=Join-Path $testRoot 'settings.json'
     Copy-Item (Join-Path $project 'settings.example.json') $SettingsPath
@@ -32,6 +33,11 @@ try {
         $icon.Dispose()
     }
     Show-ModernDashboard
+    Assert-Equal 'dashboard visible with taskbar entry' ($Script:Dashboard.Visible -and $Script:Dashboard.ShowInTaskbar) $true
+    Assert-Equal 'native Windows visibility confirms dashboard' ([ProfileVisual]::IsWindowVisible($Script:Dashboard.Handle)) $true
+    $Script:Dashboard.Hide()
+    Show-ModernDashboard
+    Assert-Equal 'second click restores hidden dashboard' $Script:Dashboard.Visible $true
     Assert-Equal 'dashboard displays actual mode source' $Script:Dashboard.Tag.Fields.mode.Text '静音 · 自动'
     Assert-Equal 'dashboard displays detection reason' $Script:Dashboard.Tag.Fields.reason.Text 'fixture game detection'
     $timer=$Script:Dashboard.Tag.Timer

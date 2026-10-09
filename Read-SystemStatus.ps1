@@ -13,6 +13,7 @@ try {
             # Sum users of each physical engine, then take the busiest engine (not the sum of all engines).
             $engines=@{}
             foreach($s in $matching) {
+                if([double]::IsNaN($s.CookedValue) -or [double]::IsInfinity($s.CookedValue) -or $s.CookedValue -gt 101 -or $s.CookedValue -lt -1){throw 'GPU counter invalid'}
                 $key=$s.InstanceName -replace 'pid_\d+_',''
                 if(-not $engines.ContainsKey($key)){$engines[$key]=0.0}
                 $engines[$key]+=[Math]::Max(0,[double]$s.CookedValue)
@@ -21,7 +22,7 @@ try {
             Set-Variable -Name $group[1] -Value ([Math]::Round($value,1))
         }
     }
-} catch {}
+} catch {$gpu3d=$null;$video=$null;$compute=$null}
 Write-AtomicJson (Join-Path $PSScriptRoot 'system_status.json') ([PSCustomObject]@{
     observedAt=[DateTime]::UtcNow.ToString('o');cpu=$(if($cpu -ge 0){[Math]::Round($cpu,1)}else{$null})
     memoryPercent=$(if($memory){$memory.load}else{$null})

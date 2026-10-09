@@ -29,6 +29,17 @@
   "gameIdleQuietMinutes": 10,
   "gameExitMissCount": 6,
   "processorBaseMHz": 0,
+  "workstation": {
+    "enabled": false,
+    "freqMax": 1800,
+    "awayMinutes": 20,
+    "cpuThreshold": 25,
+    "processCpuThreshold": 10,
+    "singleCoreThreshold": 70,
+    "gpuThreshold": 15,
+    "protectedProcesses": [],
+    "pausedUntil": ""
+  },
   "detection": {
     "discoverSteam": true,
     "discoverEpic": true,

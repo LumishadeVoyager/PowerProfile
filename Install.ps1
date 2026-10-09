@@ -31,7 +31,7 @@ foreach ($f in @($WorkerPath, $TrayPath, $VbsPath, (Join-Path $ScriptDir 'PowerP
     }
 }
 Write-Host "[2/5] 脚本文件齐全" -ForegroundColor Green
-foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProfileModernUI.ps1','PowerProfileUI.cs','Read-SystemStatus.ps1','legacy\PowerProfileTray.ps1')) {
+foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProfileModernUI.ps1','PowerProfileUI.cs','Read-SystemStatus.ps1','PowerProfileLog.ps1','PowerProfileWorkstation.ps1','PowerProfileWorkstation.cs','workdays.2026.json','legacy\PowerProfileTray.ps1')) {
     if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}
 }
 . (Join-Path $ScriptDir 'PowerProfileVersion.ps1')

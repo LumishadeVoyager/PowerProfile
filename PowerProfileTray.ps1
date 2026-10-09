@@ -10,6 +10,9 @@ $LegacyIdleQuietStatePath = Join-Path $ScriptDir 'idle_quiet_state.json'
 $LifecycleLog = Join-Path $ScriptDir 'tray_lifecycle.log'
 $DetectionScript = Join-Path $ScriptDir 'PowerProfileDetection.ps1'
 . $DetectionScript
+. (Join-Path $ScriptDir 'PowerProfileLog.ps1')
+. (Join-Path $ScriptDir 'PowerProfileWorkstation.ps1')
+Initialize-ProfileLogging $ScriptDir 'tray'
 
 function Write-LifecycleLog {
     param([string]$Msg)
@@ -17,6 +20,7 @@ function Write-LifecycleLog {
         $line = "{0}  PID={1}  {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $PID, $Msg
         Add-Content -Path $LifecycleLog -Value $line -Encoding UTF8
     } catch {}
+    Write-ProfileEvent 'tray.lifecycle' $Msg
 }
 
 # === 单实例保护: 全局命名 Mutex =============================================
@@ -686,10 +690,30 @@ function Invoke-Worker {
         [int]$ActivityIdleSec = -1
     )
     if ($Mode -eq 'Auto' -and $Script:WorkerProcess -and -not $Script:WorkerProcess.HasExited) { return }
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $WorkerScript), '-Mode', $Mode)
+    $operation=[Guid]::NewGuid().ToString()
+    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $WorkerScript), '-Mode', $Mode,'-OperationId',$operation)
     if ($Reason) { $args += @('-Reason', ('"{0} "' -f ($Reason -replace '["\r\n]', ' '))) }
     if ($Mode -eq 'Auto' -and $ActivityIdleSec -ge 0) { $args += @('-ActivityIdleSec', $ActivityIdleSec) }
     $Script:WorkerProcess = Start-HiddenPowerShell -Arguments $args
+    Write-ProfileEvent 'worker.request' '已派发电源检测或档位操作' -Data @{operationId=$operation;mode=$Mode;reason=$Reason;workerPid=$Script:WorkerProcess.Id}
+}
+
+function Invoke-WorkstationWorker {
+    param([switch]$Restore,[string]$RestoreReason='用户关闭、暂停或保存省电配置')
+    if($Script:WorkstationProcess -and -not $Script:WorkstationProcess.HasExited){return}
+    if(-not $Restore -and $Script:WorkerProcess -and -not $Script:WorkerProcess.HasExited){return}
+    $operation=[Guid]::NewGuid().ToString()
+    $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $WorkerScript),'-Mode','Auto','-OperationId',$operation)
+    $arguments+=if($Restore){'-RestoreWorkstation'}else{'-WorkstationOnly'}
+    if($Restore){$arguments+=@('-Reason',('"{0}"' -f ($RestoreReason -replace '["\r\n]',' ')))}
+    $Script:WorkstationProcess=Start-HiddenPowerShell $arguments
+    if($Restore){Write-ProfileEvent 'workstation.restore.request' $RestoreReason -Data @{operationId=$operation;workerPid=$Script:WorkstationProcess.Id}}
+}
+
+function Open-ProfileLog {
+    $path=Join-Path $ScriptDir ('logs\PowerProfile-'+(Get-Date).ToString('yyyy-MM-dd')+'.log')
+    if(-not (Test-Path $path)){Write-ProfileEvent 'log.open' '打开本日日志'}
+    if(Test-Path $path){Start-Process notepad.exe -ArgumentList ('"{0}"' -f $path)}
 }
 
 # === Show-Settings: 拖滑块 + 改模式名 + 其他设置 ==============================
@@ -994,6 +1018,21 @@ $menuSettings.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(96, 125, 13
 
 $menuMonitor=New-Object Windows.Forms.ToolStripMenuItem('运行状态...')
 $menu.Items.Insert(0,$menuMonitor)
+$menuWorkstation=$menu.Items.Add('工作时段附加省电')
+$menuPauseWorkstation=$menu.Items.Add('暂停附加省电到今天结束')
+$menuWorkstation.Add_Click({
+    $options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    Save-WorkstationOptions (-not $options.enabled) $options.freqMax ''
+    Invoke-WorkstationWorker -Restore
+})
+$menuPauseWorkstation.Add_Click({
+    $options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    Save-WorkstationOptions $options.enabled $options.freqMax (Get-BeijingTime).Date.AddDays(1).ToString('s')
+    Invoke-WorkstationWorker -Restore
+})
+$menu.Add_Opening({
+    try{$options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json);$menuWorkstation.Checked=$options.enabled}catch{}
+})
 
 $menuLog = $menu.Items.Add('打开日志')
 $menuLog.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(120, 144, 156))
@@ -1096,24 +1135,24 @@ $menuGame.Add_Click({
     Invoke-Worker -Mode 'Game'
 })
 $menuSettings.Add_Click({ Show-ModernSettings })
-$menuMonitor.Add_Click({ Show-ModernDashboard })
+$menuMonitor.Add_Click({ Open-ModernDashboard })
 $menuLegacy.Add_Click({ Start-TrayVersionSwitch $ScriptDir 'Legacy' })
 $menuLog.Add_Click({
-    $logPath = Join-Path $ScriptDir 'profile.log'
-    if (Test-Path $logPath) { Start-Process notepad.exe $logPath }
+    Open-ProfileLog
 })
 $menuExit.Add_Click({
+    Invoke-WorkstationWorker -Restore -RestoreReason '用户退出托盘'
     if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.Close()}
     Close-Toast
     $notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
 })
 
-# 左键单击: 切换 Auto 开/关
+# 左键单击: 打开并激活运行状态窗口
 $notify.Add_MouseClick({
     param($s, $e)
     if ($e.Button -eq 'Left') {
-        Show-ModernDashboard
+        Open-ModernDashboard
     }
 })
 
@@ -1121,8 +1160,7 @@ $notify.Add_MouseClick({
 $notify.Add_MouseDoubleClick({
     param($s, $e)
     if ($e.Button -eq 'Left') {
-        $logPath = Join-Path $ScriptDir 'profile.log'
-        if (Test-Path $logPath) { Start-Process notepad.exe $logPath }
+        Open-ProfileLog
     }
 })
 
@@ -1139,6 +1177,10 @@ $Script:LastSeenWriteTime = if (Test-Path $StatePath) {
 $watchTimer = New-Object System.Windows.Forms.Timer
 $watchTimer.Interval = 500
 $watchTimer.Add_Tick({
+    $request=Join-Path $ScriptDir 'tray_ui_request.txt'
+    if(Test-Path $request){
+        try{$action=(Get-Content $request -Raw -Encoding UTF8).Trim();Remove-Item -LiteralPath $request;if($action -eq 'Dashboard'){Open-ModernDashboard}}catch{Write-ProfileEvent 'ui.request.failed' $_.Exception.Message 'ERROR'}
+    }
     if (-not (Test-Path $StatePath)) { return }
     $writeTime = (Get-Item $StatePath).LastWriteTime
     if ($writeTime -le $Script:LastSeenWriteTime) { return }
@@ -1159,6 +1201,27 @@ $watchTimer.Add_Tick({
     }
 })
 $watchTimer.Start()
+
+# Lightweight input watcher; expensive process/GPU sampling runs in a hidden worker every 10s.
+$Script:WorkstationTimer=New-Object Windows.Forms.Timer
+$Script:WorkstationTimer.Interval=1000
+$Script:LastWorkstationCheck=[DateTime]::MinValue
+$Script:WorkstationTimer.Add_Tick({
+    try {
+        $active=$false
+        $wsPath=Join-Path $ScriptDir 'workstation_state.json'
+        if(Test-Path $wsPath){$active=[bool](Get-Content $wsPath -Raw -Encoding UTF8 | ConvertFrom-Json).active}
+        if($active -and ((Get-UserActivityIdleSeconds) -lt 1200 -or -not (Get-AutoEnabled))){Invoke-WorkstationWorker -Restore -RestoreReason '本机或远程输入，或用户退出自动调节';return}
+        if(-not $active -and ((Get-UserActivityIdleSeconds) -lt 1200 -or -not (Get-AutoEnabled) -or (Get-CurrentMode) -ne 'Idle')){return}
+        $options=Get-WorkstationOptions (Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        if(-not $active -and -not $options.enabled){return}
+        if(([DateTime]::UtcNow-$Script:LastWorkstationCheck).TotalSeconds -ge 10){
+            $Script:LastWorkstationCheck=[DateTime]::UtcNow
+            Invoke-WorkstationWorker
+        }
+    } catch {Write-ProfileEvent 'workstation.timer.failed' $_.Exception.Message 'ERROR'}
+})
+$Script:WorkstationTimer.Start()
 
 # === 自动检测定时器 (Auto 开启时, 间隔由 settings 控制) ======================
 $Script:AutoTimer = New-Object System.Windows.Forms.Timer

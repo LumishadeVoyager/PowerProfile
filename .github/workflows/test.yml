@@ -16,3 +16,4 @@ jobs:
           }
           & .\tests\PowerProfileDetection.Tests.ps1
           & .\tests\PowerProfileUI.Tests.ps1
+          & .\tests\PowerProfileWorkstation.Tests.ps1
