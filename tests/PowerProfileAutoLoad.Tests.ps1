@@ -47,8 +47,7 @@ function Get-Counter {
     param($Path,$ErrorAction)
     if($Path -like '*GPU*'){
         return @{CounterSamples=@(
-            [PSCustomObject]@{Path="pid_${PID}_luid_0_phys_0_eng_0_engtype_3D";CookedValue=5;Status=0},
-            [PSCustomObject]@{Path="pid_${PID}_luid_0_phys_0_eng_1_engtype_VideoEncode";CookedValue=85;Status=0}
+            [PSCustomObject]@{Path="pid_${PID}_luid_0_phys_0_eng_0_engtype_3D";CookedValue=5;Status=0}
         )}
     }
     return @{CounterSamples=@(
@@ -57,8 +56,9 @@ function Get-Counter {
     )}
 }
 $collected=Get-LoadSamples -Count 2 -IntervalMs 1
-Assert-Equal 'production collector marks complete CPU data valid' $collected.Valid $true
 Assert-Equal 'production collector keeps game detection 3D only' $collected.AvgGpu 5
-Assert-Equal 'production collector includes video engine in workload pressure' $collected.WorkloadGpu 85
-$Script:invalidCpu=$true
-Assert-Equal 'bad counter status cannot become low-load evidence' (Get-LoadSamples -Count 2 -IntervalMs 1).Valid $false
+Assert-Equal 'original collector retains CPU game signal' $collected.AvgCpu 40
+$oldWorker=(git -C $project show 64c0231:PowerProfile.ps1) -join "`n"
+$oldAst=[Management.Automation.Language.Parser]::ParseInput($oldWorker,[ref]$null,[ref]$null)
+$oldCollector=$oldAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-LoadSamples'},$true)
+Assert-Equal 'automatic collector exactly matches pre-balanced policy revision' ($collector.Extent.Text -replace '\r\n',"`n") ($oldCollector.Extent.Text -replace '\r\n',"`n")

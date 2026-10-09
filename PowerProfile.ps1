@@ -214,9 +214,6 @@ function Get-LoadSamples {
     $gpuVals = @()
     $cpuVals = @()
     $coreMaxVals = @()  # 每次采样所有核心里最高的占用 (识别单核瓶颈游戏, 如 RimWorld)
-    $workloadGpuVals=@();$cpuValidSamples=0;$gpuValidSamples=0
-    $processNames=@{}
-    foreach($process in @(Get-Process -ErrorAction SilentlyContinue)){$processNames[[int]$process.Id]=$process.ProcessName.ToLowerInvariant()}
     $gpuByPid = @{}
     $processCpu = @{}
     $cpuBefore = @{}
@@ -226,9 +223,7 @@ function Get-LoadSamples {
     }
     for ($i = 0; $i -lt $Count; $i++) {
         try {
-            $allGpuSamples = Get-Counter '\GPU Engine(*)\Utilization Percentage' -ErrorAction SilentlyContinue
-            $gpuSamples=if($allGpuSamples){@{CounterSamples=@($allGpuSamples.CounterSamples | Where-Object {$_.Path -match 'engtype_3D'})}}else{$null}
-            if($allGpuSamples -and @($allGpuSamples.CounterSamples | Where-Object {$_.Status -eq 0}).Count){$gpuValidSamples++;$workloadGpuVals+=Get-WorkloadGpu $allGpuSamples.CounterSamples $processNames}
+            $gpuSamples = Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction SilentlyContinue
             $sumGpu = if ($gpuSamples) {
                 ($gpuSamples.CounterSamples | Measure-Object CookedValue -Sum).Sum
             } else { 0 }
@@ -257,7 +252,6 @@ function Get-LoadSamples {
                 foreach ($s in $cpuAllCores.CounterSamples) {
                     if ($s.InstanceName -eq '_total') {
                         $cpuTotal = $s.CookedValue
-                        if($s.Status -eq 0 -and -not [double]::IsNaN($cpuTotal) -and -not [double]::IsInfinity($cpuTotal) -and $cpuTotal -ge 0 -and $cpuTotal -le 100){$cpuValidSamples++}
                     } else {
                         if ($s.CookedValue -gt $coreMax) { $coreMax = $s.CookedValue }
                     }
@@ -278,7 +272,6 @@ function Get-LoadSamples {
         } catch {}
     }
     $processGpu = @{}
-    $workloadCpu=@($processCpu.GetEnumerator() | Where-Object {$_.Key -ne $PID -and $_.Key -ne 0} | ForEach-Object {[double]$_.Value})
     foreach ($key in $gpuByPid.Keys) { $processGpu[$key] = [Math]::Min(100.0, [double]$gpuByPid[$key] / [Math]::Max(1, $Count)) }
     $topGpuPid = 0
     $topGpuAvg = 0
@@ -298,10 +291,6 @@ function Get-LoadSamples {
     }
     $topCpu = Get-TopCpuProcess
     return @{
-        Valid=($cpuValidSamples -eq $Count)
-        WorkloadGpu=if($workloadGpuVals.Count){($workloadGpuVals | Measure-Object -Average).Average}else{0}
-        WorkloadGpuValid=($gpuValidSamples -eq $Count)
-        WorkloadSingleCore=if($workloadCpu.Count){($workloadCpu | Measure-Object -Maximum).Maximum}else{0}
         ProcessCpu = $processCpu
         ProcessGpu = $processGpu
         MinGpu = if ($gpuVals.Count) { ($gpuVals | Measure-Object -Minimum).Minimum } else { 0 }

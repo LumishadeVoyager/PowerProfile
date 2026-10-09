@@ -541,7 +541,8 @@ function Read-Settings {
 }
 
 function Save-Settings {
-    param([hashtable]$Settings)
+    param([hashtable]$Settings,[string]$SettingsFile=$SettingsPath)
+    if([string]::IsNullOrWhiteSpace($SettingsFile)){$SettingsFile=Join-Path $PSScriptRoot 'settings.json'}
     $obj = [PSCustomObject]@{
         modes = [PSCustomObject]@{
             Idle     = [PSCustomObject]$Settings.modes.Idle
@@ -556,9 +557,9 @@ function Save-Settings {
         gameExitMissCount = $Settings.gameExitMissCount
     }
     # Preserve advanced/local rules when the GUI edits only its own fields.
-    if (Test-Path -LiteralPath $SettingsPath) {
+    if (Test-Path -LiteralPath $SettingsFile) {
         try {
-            $existing = Read-AtomicJson $SettingsPath
+            $existing = Read-AtomicJson $SettingsFile
             foreach ($property in $existing.PSObject.Properties) {
                 if ($property.Name -notin @($obj.PSObject.Properties.Name)) {
                     $obj | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
@@ -566,7 +567,7 @@ function Save-Settings {
             }
         } catch { throw '现有设置无法读取，请先修复 settings.json，避免覆盖本机规则。' }
     }
-    Write-AtomicJson $SettingsPath $obj -Pretty
+    Write-AtomicJson $SettingsFile $obj -Pretty
 }
 
 $Script:Settings = Read-Settings
@@ -718,6 +719,7 @@ function Open-ProfileLog {
 
 # === Show-Settings: 拖滑块 + 改模式名 + 其他设置 ==============================
 function Show-Settings {
+    param([switch]$ReturnForm)
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'PowerProfile 设置'
     $form.StartPosition = 'CenterScreen'
@@ -918,7 +920,12 @@ function Show-Settings {
     $form.Controls.Add($btnCancel)
     $form.CancelButton = $btnCancel
 
+    $form.Tag=@{Work=$work;Controls=$controls;Auto=$cmbAuto;Idle=$cmbIdle;Toast=$cmbToast;Unlock=$cmbUnlock;Quiet=$cmbQuiet;Exit=$cmbExit;SettingsFile=$SettingsPath;LastSaveError=''}
     $btnSave.Add_Click({
+        param($sender,$eventArgs)
+        $form=$sender.FindForm();$context=$form.Tag
+        $work=$context.Work;$controls=$context.Controls
+        $cmbAuto=$context.Auto;$cmbIdle=$context.Idle;$cmbToast=$context.Toast;$cmbUnlock=$context.Unlock;$cmbQuiet=$context.Quiet;$cmbExit=$context.Exit
         $diag = 'E:\PowerProfile\save_debug.log'
         try {
             Add-Content -Path $diag -Value ("{0}  Click triggered" -f (Get-Date -Format 'HH:mm:ss.fff')) -Encoding UTF8
@@ -939,7 +946,7 @@ function Show-Settings {
             $work.manualUnlockMinutes = [int](Get-PresetValue $cmbUnlock)
             $work.gameIdleQuietMinutes = [int](Get-PresetValue $cmbQuiet)
             $work.gameExitMissCount = [int](Get-PresetValue $cmbExit)
-            Save-Settings -Settings $work
+            Save-Settings -Settings $work -SettingsFile $context.SettingsFile
             Add-Content -Path $diag -Value "  Save-Settings 已调用 -> $SettingsPath" -Encoding UTF8
             Add-Content -Path $diag -Value ("  文件存在? " + (Test-Path $SettingsPath)) -Encoding UTF8
             $Script:Settings = Read-Settings
@@ -952,19 +959,22 @@ function Show-Settings {
                 Invoke-Worker -Mode $current
                 Add-Content -Path $diag -Value "  Invoke-Worker -Mode $current (应用新频率)" -Encoding UTF8
             }
+            $form.Tag.LastSaveError=''
             $form.DialogResult = 'OK'
             $form.Close()
         } catch {
+            $form.Tag.LastSaveError=$_.Exception.Message
+            [void][Windows.Forms.MessageBox]::Show($form,$_.Exception.Message,'设置未保存',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Error)
             try { Add-Content -Path $diag -Value ("  [异常] " + $_.ToString()) -Encoding UTF8 } catch {}
         }
-    }.GetNewClosure())
+    })
 
-    $btnCancel.Add_Click({
+    $btnCancel.Add_Click({param($sender,$eventArgs) $form=$sender.FindForm()
         $form.DialogResult = 'Cancel'
         $form.Close()
-    }.GetNewClosure())
+    })
 
-    $btnReset.Add_Click({
+    $btnReset.Add_Click({param($sender,$eventArgs) $form=$sender.FindForm()
         $r = [System.Windows.Forms.MessageBox]::Show(
             "确定恢复所有设置为默认?`n`n会重置三个模式名称、频率上限和其他参数。",
             '确认', [System.Windows.Forms.MessageBoxButtons]::YesNo,
@@ -974,11 +984,13 @@ function Show-Settings {
             $Script:Settings = Read-Settings
             Refresh-ModeLabels
             if (Get-Command Refresh-MenuLabels -ErrorAction SilentlyContinue) { Refresh-MenuLabels }
+            $form.Tag.LastSaveError=''
             $form.DialogResult = 'OK'
             $form.Close()
         }
-    }.GetNewClosure())
+    })
 
+    if($ReturnForm){return $form}
     [void]$form.ShowDialog()
 }
 
