@@ -1,43 +1,29 @@
-$ErrorActionPreference='Stop'
-. (Join-Path (Split-Path -Parent $PSScriptRoot) 'PowerProfileLogic.ps1')
+﻿$ErrorActionPreference='Stop'
+$project=Split-Path -Parent $PSScriptRoot
+. (Join-Path $project 'PowerProfileLogic.ps1')
 function Assert-Equal($Name,$Actual,$Expected){if($Actual -ne $Expected){throw "$Name expected $Expected got $Actual"};Write-Host "PASS $Name"}
-$options=Read-AutoLoadOptions $null
-$now=[DateTime]::UtcNow
-function Sample($Cpu,$Core=30,$Gpu=0){return @{Valid=$true;AvgCpu=$Cpu;AvgCoreMax=$Core;WorkloadGpu=$Gpu;WorkloadGpuValid=$true}}
-$medium=Sample 35
-$low=Sample 8
-$high=Sample 85
-$first=Get-AutoLoadTransition Idle $medium $null $options $now
-Assert-Equal 'ordinary medium work automatically selects balanced' $first.Mode Balanced
-Assert-Equal 'brief load dip holds balanced' (Get-AutoLoadTransition Balanced $low $first.State $options $now.AddSeconds(30)).Mode Balanced
-$down1=Get-AutoLoadTransition Balanced $low $first.State $options $now.AddSeconds(30)
-$down2=Get-AutoLoadTransition Balanced $low $down1.State $options $now.AddSeconds(60)
-$down3=Get-AutoLoadTransition Balanced $low $down2.State $options $now.AddSeconds(90)
-Assert-Equal 'three low rounds return to quiet' $down3.Mode Idle
-$high1=Get-AutoLoadTransition Idle $high $null $options $now
-Assert-Equal 'one high spike uses balanced rather than unlimited' $high1.Mode Balanced
-$high2=Get-AutoLoadTransition Balanced $high $high1.State $options $now.AddSeconds(30)
-Assert-Equal 'sustained CPU job enters game performance profile' $high2.Mode Game
-Assert-Equal 'high workload outranks keyboard absence' (Get-AutoModeTransition Idle @{IsGame=$false} 0 3 $high2.Mode).Mode Game
-Assert-Equal 'real game goes straight to performance without confirmation' (Get-AutoModeTransition Idle @{IsGame=$true} 0 3 Balanced).Mode Game
-Assert-Equal 'game exit retains original grace count' (Get-AutoModeTransition Game @{IsGame=$false} 0 3 Balanced).Mode Game
-Assert-Equal 'game exit lands in balanced while work continues' (Get-AutoModeTransition Game @{IsGame=$false} 2 3 Balanced).Mode Balanced
-Assert-Equal 'single-core pressure selects balanced' (Get-AutoLoadTransition Idle (Sample 12 90) $null $options $now).Mode Balanced
-$ownWork=Sample 8 99;$ownWork.WorkloadSingleCore=20
-Assert-Equal 'observer core spike is not application pressure' (Get-AutoLoadTransition Idle $ownWork $null $options $now).Mode Idle
-Assert-Equal 'moderate GPU work selects balanced' (Get-AutoLoadTransition Idle (Sample 8 30 40) $null $options $now).Mode Balanced
-$gpu1=Get-AutoLoadTransition Idle (Sample 8 30 85) $null $options $now
-Assert-Equal 'sustained GPU encoding enters performance' (Get-AutoLoadTransition Balanced (Sample 8 30 85) $gpu1.State $options $now.AddSeconds(30)).Mode Game
-Assert-Equal 'CPU load in hysteresis band holds balanced' (Get-AutoLoadTransition Balanced (Sample 20) $down2.State $options $now.AddSeconds(90)).Mode Balanced
-Assert-Equal 'short medium period holds performance' (Get-AutoLoadTransition Game $medium $high2.State $options $now.AddSeconds(60)).Mode Game
-Assert-Equal 'missing CPU sample cannot downgrade performance' (Get-AutoLoadTransition Game @{Valid=$false} $null $options $now).Mode Game
-$missingGpu=Sample 8;$missingGpu.WorkloadGpuValid=$false
-Assert-Equal 'missing GPU cannot masquerade as idle work' (Get-AutoLoadTransition Game $missingGpu $down2.State $options $now).Mode Game
-Assert-Equal 'expired confirmation cannot upgrade' (Get-AutoLoadTransition Balanced $high $high1.State $options $now.AddMinutes(5)).Mode Balanced
-$changed=Read-AutoLoadOptions @{highConfirmCount=3}
-Assert-Equal 'policy change restarts confirmation' (Get-AutoLoadTransition Balanced $high $high1.State $changed $now.AddSeconds(30)).State.highCount 1
-Assert-Equal 'manual mode change restarts confirmation' (Get-AutoLoadTransition Idle $high $high1.State $options $now.AddSeconds(30)).State.highCount 1
-Assert-Equal 'idle quiet guard delegates managed work to load policy' (Get-GameIdleQuietDecision Game 900 600 900 @{Fresh=$true;IsGame=$false;SmartLoadManaged=$true}) DeferredWorkloadPolicy
+$legacyAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $project 'legacy\PowerProfileLogic.ps1'),[ref]$null,[ref]$null)
+$legacy=$legacyAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-AutoModeTransition'},$true)
+. ([scriptblock]::Create($legacy.Extent.Text.Replace('function Get-AutoModeTransition','function Get-LegacyAutoModeTransition')))
+foreach($mode in @('Idle','Balanced','Game')){
+    foreach($signal in @(@{IsGame=$false},@{IsGame=$true},@{Defer=$true},@{ForceIdle=$true},@{ForceIdle=$true;IsGame=$true})){
+        foreach($miss in @(0,1,2,3)){
+            $expected=Get-LegacyAutoModeTransition $mode $signal $miss 3
+            $actual=Get-AutoModeTransition $mode $signal $miss 3
+            if($actual.Mode -ne $expected.Mode -or $actual.MissCount -ne $expected.MissCount){throw 'Original switching behavior changed'}
+        }
+    }
+}
+Write-Host 'PASS 60 recorded mode / signal / exit-grace combinations match legacy'
+foreach($load in @(@{Valid=$true;AvgCpu=35;WorkloadSingleCore=90;WorkloadGpu=40},@{Valid=$true;AvgCpu=95;WorkloadGpu=90},@{Valid=$false})){
+    Assert-Equal 'non-game workload never promotes quiet' (Get-AutoModeTransition Idle @{IsGame=$false;Load=$load} 0 3).Mode Idle
+    Assert-Equal 'game exit returns quiet regardless of ordinary workload' (Get-AutoModeTransition Game @{IsGame=$false;Load=$load} 2 3).Mode Idle
+}
+Assert-Equal 'confirmed game immediately enters game profile' (Get-AutoModeTransition Idle @{IsGame=$true} 0 3).Mode Game
+Assert-Equal 'game exit retains original grace count' (Get-AutoModeTransition Game @{IsGame=$false} 0 3).Mode Game
+Assert-Equal 'failed detection retains current mode' (Get-AutoModeTransition Game @{Defer=$true} 2 3).Mode Game
+Assert-Equal 'original idle guard restored' (Get-GameIdleQuietDecision Game 900 600 900 @{Fresh=$true;IsGame=$false;SmartLoadManaged=$true}) ForceNoGameSignal
+
 $names=@{1='wallpaper64';2='dwm';3='ffmpeg';4='code'}
 $samples=@(
     @{Path='pid_1_luid_0_phys_0_eng_0_engtype_3D';CookedValue=95},
@@ -47,8 +33,7 @@ $samples=@(
 )
 Assert-Equal 'encoding is counted independently of wallpaper and desktop' (Get-WorkloadGpu $samples $names) 85
 Assert-Equal 'wallpaper and desktop alone never trigger performance' (Get-WorkloadGpu $samples[0..1] $names) 0
-Assert-Equal 'invalid threshold pair falls back safely' (Read-AutoLoadOptions @{balancedCpu=80;highCpu=70}).balancedCpu 25
-Write-Host 'All smart workload policy tests passed.'
+Write-Host 'Original switching policy and workload collector tests passed.'
 
 # Exercise the production collector with deterministic counter data, never applying power.
 $project=Split-Path -Parent $PSScriptRoot

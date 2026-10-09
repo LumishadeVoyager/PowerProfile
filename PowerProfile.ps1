@@ -62,7 +62,6 @@ function Read-Settings {
         UserIdleSec = $DefaultUserIdleSec
         GameExitMissCount = $DefaultGameExitMissCount
         Detection = Read-DetectionOptions $null
-        AutoLoad = Read-AutoLoadOptions $null
     }
     # 深拷贝默认值
     foreach ($k in $DefaultProfiles.Keys) {
@@ -75,7 +74,6 @@ function Read-Settings {
         try {
             $json = Read-AtomicJson $path
             $result.Detection = Read-DetectionOptions $json.detection
-            $result.AutoLoad = Read-AutoLoadOptions $json.autoLoad
             if ($json.modes) {
                 foreach ($k in 'Idle','Balanced','Game') {
                     $m = $json.modes.$k
@@ -473,7 +471,7 @@ function Test-GameRunning {
     $detection = Get-SessionGameDetection -Foreground $fs -Load $load -Options $Settings.Detection `
         -NonGameProcesses $Script:HardNonGameProcesses -StateDirectory $PSScriptRoot -ReadOnly:$Diagnose
     $detection.Load=$load
-    $detection.SmartLoadManaged=$true
+    $detection.SmartLoadManaged=$false
     if ($detection.IsGame) {
         # A real library/confirmed game releases startup quiet with native HID input too.
         if (-not $Diagnose) {
@@ -622,24 +620,13 @@ if ($Mode -eq 'Auto') {
     $current = if (Test-Path $statePath) { (Get-Content $statePath -Raw).Trim() } else { 'Idle' }
 
     $detection = Test-GameRunning -CurrentMode $current -InputIdleSeconds $ActivityIdleSec
-    $loadStatePath=Join-Path $PSScriptRoot 'auto_load_state.json'
-    $previousLoad=$null
-    try{if(Test-Path $loadStatePath){$previousLoad=Read-AtomicJson $loadStatePath}}catch{}
-    $loadDecision=Get-AutoLoadTransition $current $detection.Load $previousLoad $Settings.AutoLoad -MaxAgeSeconds ([Math]::Max(60,$Settings.AutoIntervalSec*3))
-    if(-not $detection.IsGame -and -not $detection.ForceIdle){
-        $detection.Reason="$($loadDecision.Reason); $($detection.Reason)"
-        if(-not $loadDecision.Valid){$detection.Defer=$true}
-    }
     Write-GameDetectionState -Detection $detection -InputIdleSeconds $ActivityIdleSec
     $miss = 0
     if (Test-Path $missCountPath) {
         [void][int]::TryParse(((Get-Content $missCountPath -Raw -ErrorAction SilentlyContinue) -as [string]), [ref]$miss)
     }
-    $transition = Get-AutoModeTransition $current $detection $miss $Settings.GameExitMissCount $loadDecision.Mode
-    if($detection.IsGame -or $detection.ForceIdle){$loadDecision.State.highCount=0;$loadDecision.State.downCount=0}
-    $loadDecision.State.mode=$transition.Mode
-    Write-AtomicJson $loadStatePath $loadDecision.State
-    Write-ProfileEvent 'auto.decision' $detection.Reason -Data @{before=$current;after=$transition.Mode;missCount=$transition.MissCount;source=$detection.Source;process=$detection.ProcessName;processId=$detection.ProcessId;inputIdleSeconds=$ActivityIdleSec;load=$loadDecision.State;loadValid=$loadDecision.Valid;gpuAvailable=$detection.Load.WorkloadGpuValid;policy=$Settings.AutoLoad}
+    $transition = Get-AutoModeTransition $current $detection $miss $Settings.GameExitMissCount
+    Write-ProfileEvent 'auto.decision' $detection.Reason -Data @{before=$current;after=$transition.Mode;missCount=$transition.MissCount;source=$detection.Source;process=$detection.ProcessName;processId=$detection.ProcessId;inputIdleSeconds=$ActivityIdleSec;policy='OriginalGameDetection'}
     $needsApply = $transition.Mode -ne $current
     if ($detection.ForceIdle) {
         $bootStamp = Get-BootStamp
