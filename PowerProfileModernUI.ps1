@@ -65,6 +65,23 @@ function New-ModernLabel {
     $label.SetBounds($X,$Y,$Width,25)
     return $label
 }
+function Invoke-DashboardAction {
+    param([string]$Action)
+    try {
+        if($Action -eq 'More'){return}
+        if($Script:DashboardActions -and $Script:DashboardActions.ContainsKey($Action)){& $Script:DashboardActions[$Action]}
+        elseif($Action -eq 'Settings'){Show-ModernSettings}
+        elseif($Action -eq 'Logs'){Show-ModernLogViewer}
+        else{throw '托盘操作尚未初始化，请稍后重试。'}
+        Update-ModernDashboard
+    }catch{Write-ProfileEvent 'ui.dashboard.action.failed' $_.Exception.Message 'ERROR' @{action=$Action};[void][Windows.Forms.MessageBox]::Show($_.Exception.Message,'PowerProfile')}
+}
+function New-DashboardButton {
+    param($Parent,[string]$Text,[int]$X,[int]$Y,[int]$Width,[string]$Action)
+    $button=New-Object Windows.Forms.Button;$button.Text=$Text;$button.SetBounds($X,$Y,$Width,30);$button.FlatStyle='Flat';$button.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$button.BackColor=[Drawing.Color]::White;$button.Tag=$Action
+    $button.Add_Click({param($sender,$eventArgs) Invoke-DashboardAction $sender.Tag})
+    $Parent.Controls.Add($button);return $button
+}
 function Initialize-ModernForm {
     param($Form,[string]$Title,[int]$Width,[int]$Height)
     $Form.Text=$Title;$Form.Font=$Script:ModernFont
@@ -117,6 +134,15 @@ function Update-ModernDashboard {
     if(-not $Script:Dashboard -or $Script:Dashboard.IsDisposed){return}
     $fields=$Script:Dashboard.Tag.Fields
     $mode=Get-CurrentMode
+    if($Script:Dashboard.Tag.Actions){
+        foreach($key in @('Auto','Idle','Balanced','Game')){
+            $button=$Script:Dashboard.Tag.Actions[$key]
+            $selected=if($key -eq 'Auto'){Get-AutoEnabled}else{$key -eq $mode}
+            $button.BackColor=if($selected){[Drawing.Color]::FromArgb(228,240,247)}else{[Drawing.Color]::White}
+            $button.ForeColor=if($selected){[Drawing.Color]::FromArgb(39,106,159)}else{[Drawing.Color]::FromArgb(42,55,67)}
+            $button.Text=if($key -eq 'Auto'){if(Get-AutoEnabled){'自动切换 · 开'}else{'自动切换 · 关'}}else{$Script:Settings.modes[$key].name}
+        }
+    }
     $fields.mode.Text="$(if($Script:Settings.modes.ContainsKey($mode)){$Script:Settings.modes[$mode].name}else{$mode}) · $(if(Get-AutoEnabled){'自动'}else{'手动锁定'})"
     $d=Read-GameDetectionState
     $fields.reason.Text=if($d.Fresh){([string]$d.Reason -split ';')[0]}else{'等待新一轮检测 · 原有控制逻辑保持'}
@@ -184,7 +210,7 @@ function Show-ModernDashboard {
     if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.WindowState='Normal';$Script:Dashboard.Show();[ProfileVisual]::ActivateDashboard($Script:Dashboard.Handle);$Script:Dashboard.Activate();return}
     try {Initialize-EnergyService} catch {Write-ProfileEvent 'energy.start.failed' '用电模块暂不可用；继续显示系统状态' 'WARN'}
     $form=New-Object Windows.Forms.Form
-    Initialize-ModernForm $form 'PowerProfile · 运行状态' 500 740
+    Initialize-ModernForm $form 'PowerProfile · 概览' 500 804
     $form.ShowInTaskbar=$true
     $fields=@{};$bars=@{}
     $accent=New-Object Windows.Forms.Panel;$accent.BackColor=[Drawing.Color]::FromArgb(39,106,159);$accent.SetBounds(18,20,4,49);$form.Controls.Add($accent)
@@ -193,7 +219,12 @@ function Show-ModernDashboard {
     $subtitle=New-ModernLabel '运行状态 · 按需系统监测' 34 51 445;$subtitle.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$subtitle.AutoEllipsis=$true;$fields.hardware=$subtitle
     $fields.reason=New-ModernLabel '' 18 82 443;$fields.reason.AutoEllipsis=$true
     $form.Controls.Add($fields.mode);$form.Controls.Add($subtitle);$form.Controls.Add($fields.reason)
-    $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds(12,116,476,235);$form.Controls.Add($card)
+    $actions=@{}
+    $actions.Auto=New-DashboardButton $form '自动切换' 18 114 131 'Auto'
+    $x=159
+    foreach($key in @('Idle','Balanced','Game')){$actions[$key]=New-DashboardButton $form $Script:Settings.modes[$key].name $x 114 101 $key;$x+=111}
+    $Script:DashboardTip.SetToolTip($actions.Auto,'开启或关闭自动档位检测；选择具体档位会进入手动锁定。')
+    $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds(12,160,476,235);$form.Controls.Add($card)
     $card.Controls.Add((New-ModernLabel 'CPU 当前频率 · 估算' 14 15 185))
     $fields.frequency=New-ModernLabel '等待采样' 235 8 225;$fields.frequency.Height=34;$fields.frequency.TextAlign='TopRight';$fields.frequency.Font=New-Object Drawing.Font 'Segoe UI',18,([Drawing.FontStyle]::Bold);$card.Controls.Add($fields.frequency)
     $divider=New-Object Windows.Forms.Panel;$divider.BackColor=[Drawing.Color]::FromArgb(234,239,242);$divider.SetBounds(14,47,448,1);$card.Controls.Add($divider)
@@ -205,7 +236,7 @@ function Show-ModernDashboard {
         $card.Controls.Add($caption);$card.Controls.Add($bar);$card.Controls.Add($value)
         $fields[$row[1]]=$value;$bars[$row[1]]=$bar;$y+=32
     }
-    $energy=New-Object Windows.Forms.Panel;$energy.BackColor=[Drawing.Color]::White;$energy.SetBounds(12,365,476,124);$form.Controls.Add($energy)
+    $energy=New-Object Windows.Forms.Panel;$energy.BackColor=[Drawing.Color]::White;$energy.SetBounds(12,409,476,124);$form.Controls.Add($energy)
     $energy.Controls.Add((New-ModernLabel '电脑用电' 14 11 170))
     $fields.energyStatus=New-ModernLabel '未连接' 250 11 210;$fields.energyStatus.TextAlign='TopRight';$fields.energyStatus.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$energy.Controls.Add($fields.energyStatus)
     foreach($row in @(@('当前功率','watts',14),@('今日估算用电','energyToday',167),@('今日估算电费','energyFee',320))){
@@ -214,7 +245,7 @@ function Show-ModernDashboard {
     }
     $source=New-ModernLabel '米家智能插座 3 · 连接后实际采样' 14 99 280;$source.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$source.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$energy.Controls.Add($source)
     $energyLink=New-Object Windows.Forms.LinkLabel;$energyLink.Text='用电详情 →';$energyLink.Font=$Script:ModernFont;$energyLink.SetBounds(352,97,110,25);$energyLink.LinkColor=[Drawing.Color]::FromArgb(39,106,159);$energy.Controls.Add($energyLink);$energyLink.Add_LinkClicked({try{Show-EnergyDetails}catch{Write-ProfileEvent 'ui.energy.open.failed' $_.Exception.GetBaseException().Message 'ERROR';[void][Windows.Forms.MessageBox]::Show('用电详情暂时无法打开，请查看日志。','PowerProfile')}})
-    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,501,476,193);$form.Controls.Add($details)
+    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,545,476,193);$form.Controls.Add($details)
     foreach($row in @(@('配置频率上限','limit',13),@('键鼠未输入','idle',41),@('供电状态','power',69),@('连续运行','uptime',97))){
         $caption=New-ModernLabel $row[0] 14 $row[2] 120;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118)
         $value=New-ModernLabel '--' 135 $row[2] 325;$value.TextAlign='TopRight'
@@ -222,16 +253,23 @@ function Show-ModernDashboard {
     }
     $fields.plan=New-ModernLabel '' 14 125 448;$fields.plan.Height=35;$fields.plan.AutoEllipsis=$true;$details.Controls.Add($fields.plan)
     $stable=New-ModernLabel '稳定参数保留 · C-state 不作更改' 14 163 448;$stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$details.Controls.Add($stable)
-    $fields.updated=New-ModernLabel '' 18 712 273;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
-    $log=New-Object Windows.Forms.Button;$log.Text='查看日志';$log.SetBounds(312,704,82,29);$log.FlatStyle='Flat';$log.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($log);$log.Add_Click({Show-ModernLogViewer})
-    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(404,704,78,29);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
+    $fields.updated=New-ModernLabel '' 18 742 464;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
+    $actions.Settings=New-DashboardButton $form '设置' 18 768 100 'Settings'
+    $actions.Logs=New-DashboardButton $form '查看日志' 128 768 100 'Logs'
+    $more=New-Object Windows.Forms.ContextMenuStrip;$more.Font=$Script:ModernFont
+    foreach($entry in @(@('工作时段附加省电','Workstation'),@('暂停附加省电到今天结束','PauseWorkstation'),@('切换为旧版','Legacy'),@('退出 PowerProfile','Exit'))){$item=$more.Items.Add($entry[0]);$item.Tag=$entry[1];$item.Add_Click({param($sender,$eventArgs) Invoke-DashboardAction $sender.Tag})}
+    $more.Add_Opening({param($sender,$eventArgs) try{$options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath);$sender.Items[0].Checked=$options.enabled;$sender.Items[1].Enabled=$options.enabled}catch{}})
+    $actions.More=New-DashboardButton $form '更多操作 ▾' 238 768 130 'More'
+    $actions.More.Add_Click({param($sender,$eventArgs) $Script:Dashboard.Tag.MoreMenu.Show($sender,(New-Object Drawing.Point 0,$sender.Height))})
+    $close=New-Object Windows.Forms.Button;$close.Text='收起';$close.SetBounds(378,768,104,30);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
     $close.Add_Click({$Script:Dashboard.Close()})
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=5000
     $timer.Add_Tick({try{Invoke-TelemetrySample;Update-ModernDashboard}catch{Write-ProfileEvent 'ui.dashboard.refresh.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace}}})
-    $form.Tag=@{Fields=$fields;Bars=$bars;Timer=$timer}
+    $form.Tag=@{Fields=$fields;Bars=$bars;Timer=$timer;Actions=$actions;MoreMenu=$more}
     $form.Add_FormClosed({
         param($sender,$eventArgs)
         $sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose()
+        $sender.Tag.MoreMenu.Dispose()
         if($Script:TelemetryProcess -and -not $Script:TelemetryProcess.HasExited){try{$Script:TelemetryProcess.Kill()}catch{}}
         if($Script:TelemetryProcess){$Script:TelemetryProcess.Dispose();$Script:TelemetryProcess=$null}
         if($sender.Icon){$sender.Icon.Dispose()}

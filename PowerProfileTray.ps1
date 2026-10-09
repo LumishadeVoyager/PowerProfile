@@ -1147,6 +1147,13 @@ $menuExit.Add_Click({
     [System.Windows.Forms.Application]::Exit()
 })
 
+# Both surfaces invoke the same menu handlers, including restore and rollback paths.
+$Script:DashboardActions=@{}
+foreach($entry in @(@('Auto',$menuAuto),@('Idle',$menuIdle),@('Balanced',$menuBalanced),@('Game',$menuGame),@('Settings',$menuSettings),@('Logs',$menuLog),@('Workstation',$menuWorkstation),@('PauseWorkstation',$menuPauseWorkstation),@('Legacy',$menuLegacy),@('Exit',$menuExit))){
+    $actionItem=$entry[1]
+    $Script:DashboardActions[$entry[0]]={ $actionItem.PerformClick() }.GetNewClosure()
+}
+
 # 左键单击: 打开并激活运行状态窗口
 $notify.Add_MouseClick({
     param($s, $e)

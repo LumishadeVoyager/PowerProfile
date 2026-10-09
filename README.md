@@ -171,3 +171,6 @@ powershell -ExecutionPolicy Bypass -File E:\PowerProfile\Uninstall.ps1
 原有频率档位用于本机的静音和稳定性调校，本次识别升级不主动提高这些档位。电源策略只能调节性能与功耗，不能据此确认硬件崩溃的原因，也不能保证解决硬件稳定性问题。
 
 升级推送后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\_restart_tray.ps1`，让托盘加载新逻辑。重启脚本只停止本安装目录启动的托盘/Worker/VBS，不处理无法识别来源的 PowerShell 进程；需要时由 Windows 请求管理员权限。
+# 概览主界面
+
+托盘左键打开概览：顶部直接控制自动切换和静音、均衡、游戏档位，当前档位高亮；底部可打开设置和日志。更多操作包含附加省电开关、当天暂停、切换旧版和退出。收起只关闭概览窗口，托盘继续运行。所有操作与托盘右键菜单共用处理逻辑。

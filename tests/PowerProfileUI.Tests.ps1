@@ -41,6 +41,16 @@ try {
     Assert-Equal 'second click restores hidden dashboard' $Script:Dashboard.Visible $true
     Assert-Equal 'dashboard displays actual mode source' $Script:Dashboard.Tag.Fields.mode.Text '静音 · 自动'
     Assert-Equal 'dashboard displays detection reason' $Script:Dashboard.Tag.Fields.reason.Text 'fixture game detection'
+    $dashboardInvoked=New-Object 'System.Collections.Generic.List[string]'
+    $Script:DashboardActions=@{}
+    foreach($key in @('Auto','Idle','Balanced','Game','Settings','Logs','Workstation','PauseWorkstation','Legacy','Exit')){
+        $captured=$key;$Script:DashboardActions[$key]={ $dashboardInvoked.Add($captured) }.GetNewClosure()
+    }
+    foreach($key in @('Auto','Idle','Balanced','Game','Settings','Logs')){$Script:Dashboard.Tag.Actions[$key].PerformClick()}
+    foreach($item in $Script:Dashboard.Tag.MoreMenu.Items){$item.PerformClick()}
+    Assert-Equal 'main window routes all actions to shared tray handlers' ($dashboardInvoked -join ',') 'Auto,Idle,Balanced,Game,Settings,Logs,Workstation,PauseWorkstation,Legacy,Exit'
+    Assert-Equal 'auto state is visible on main button' $Script:Dashboard.Tag.Actions.Auto.Text '自动切换 · 开'
+    Assert-Equal 'main controls fit client area' (@($Script:Dashboard.Controls | Where-Object {$_.Bottom -gt $Script:Dashboard.ClientSize.Height -or $_.Right -gt $Script:Dashboard.ClientSize.Width}).Count) 0
     Assert-Equal 'merged energy card exists' ($Script:Dashboard.Tag.Fields.ContainsKey('watts')) $true
     Assert-Equal 'unconfigured energy never displays demo watts' $Script:Dashboard.Tag.Fields.watts.Text '-- W'
     Show-EnergyDetails
