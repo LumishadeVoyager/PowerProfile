@@ -51,6 +51,7 @@ function Get-StrictProcessProtection {
     $result=@{Game=$false;Protected=$false;Process='';Known=$true;UnknownProcesses=@()}
     foreach($p in $Processes){
         if($p.Id -eq $PID){continue}
+        try{if($p.HasExited){continue}}catch{}
         $name=$p.ProcessName
         if(@($Options.protectedProcesses) -contains $name){$result.Protected=$true;$result.Process=$name;return $result}
         $explicit=@($DetectionOptions.gameProcesses | ForEach-Object {$_ -replace '\.exe$',''}) -contains $name
@@ -60,7 +61,12 @@ function Get-StrictProcessProtection {
         if(-not $path -and $p.SessionId -gt 0){$identity=Get-ProcessIdentity $p.Id;if($identity){$path=$identity.Path}}
         foreach($root in $Roots){if(Test-PathUnderRoot $path $root.Path){$result.Game=$true;$result.Process=$name;return $result}}
         # A user application we cannot inspect must not be treated as proven safe.
-        if(-not $path -and $p.SessionId -gt 0){$result.Known=$false;$result.UnknownProcesses+=($name+'#'+$p.Id)}
+        if(-not $path -and $p.SessionId -gt 0){
+            # Short-lived Git/compiler processes can exit between enumeration and identity lookup.
+            # Only an application that still exists is an unknown safety signal.
+            if($p.Id -and -not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)){continue}
+            $result.Known=$false;$result.UnknownProcesses+=($name+'#'+$p.Id)
+        }
     }
     return $result
 }

@@ -39,6 +39,8 @@ $game.ProcessName='actual-game';$game.Path='C:\games\Installed\bin\actual-game.e
 Assert-Equal 'background library executable blocks without D3D or load' (Get-StrictProcessProtection @($game) $o $d @(@{Path='C:\games\Installed'})).Game $true
 $game.ProcessName='crashreportclient'
 Assert-Equal 'library helper does not become game' (Get-StrictProcessProtection @($game) $o $d @(@{Path='C:\games\Installed'})).Game $false
+$exited=[PSCustomObject]@{ProcessName='ExampleGame';Path=$null;SessionId=1;HasExited=$true}
+Assert-Equal 'exited snapshot process cannot block' (Get-StrictProcessProtection @($exited) $o $d @()).Game $false
 $root=Join-Path ([IO.Path]::GetTempPath()) ('PowerProfileWorkstationTests-'+[Guid]::NewGuid())
 [void][IO.Directory]::CreateDirectory($root)
 try{
