@@ -69,7 +69,7 @@ function Invoke-DashboardAction {
     param([string]$Action)
     try {
         if($Action -eq 'More'){return}
-        if($Script:DashboardActions -and $Script:DashboardActions.ContainsKey($Action)){& $Script:DashboardActions[$Action]}
+        if($Script:DashboardActions -and $Script:DashboardActions.ContainsKey($Action)){$Script:DashboardActions[$Action].PerformClick()}
         elseif($Action -eq 'Settings'){Show-ModernSettings}
         elseif($Action -eq 'Logs'){Show-ModernLogViewer}
         else{throw '托盘操作尚未初始化，请稍后重试。'}
@@ -325,19 +325,21 @@ function Show-ModernSettings {
     $quiet=New-WorkstationCombo $plan 230 231 188 @(@(10,'至少 10 秒'),@(20,'至少 20 秒'),@(30,'至少 30 秒'),@(60,'至少 60 秒')) $w.quietConfirmSeconds
     $y=279
     foreach($text in @('时段采用北京时间；结束时撤销附加参数','游戏、高负载和手动档位始终优先','仅调整交流电上限；保留 C-state 等稳定参数')){$plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=31}
-    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;Start=$start;End=$end;Frequency=$frequency;Quiet=$quiet}}
+    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;Start=$start;End=$end;Frequency=$frequency;Quiet=$quiet};Toast=$toast}
     $y=18
     foreach($text in @('游戏主体进程存在时，禁止附加省电','暂不添加剪辑、建模软件进程名单','CPU 总占用 ≥25% 或单进程 ≥10% 阻止','单进程占用 ≥70% 的一核算力也阻止','任一 GPU 引擎 ≥15% 时阻止','检查失败不进入；低负载需连续两次确认')) {
         $protect.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38
     }
     $save=New-Object Windows.Forms.Button;$save.Text='保存';$save.SetBounds(368,440,100,30);$form.Controls.Add($save)
     $save.Add_Click({
+        param($sender,$eventArgs)
+        $settingsForm=$sender.FindForm();$plan=$settingsForm.Tag.Plan
         try {
-            Save-WorkstationOptions $enabled.Checked ([int]$frequency.SelectedItem.Value) '' -AwayMinutes ([int]$away.SelectedItem.Value) -Schedule ([string]$schedule.SelectedItem.Value) -StartMinute ([int]$start.SelectedItem.Value) -EndMinute ([int]$end.SelectedItem.Value) -QuietConfirmSeconds ([int]$quiet.SelectedItem.Value) -ToastEnabled $toast.Checked
+            Save-WorkstationOptions $plan.Enabled.Checked ([int]$plan.Frequency.SelectedItem.Value) '' -AwayMinutes ([int]$plan.Away.SelectedItem.Value) -Schedule ([string]$plan.Schedule.SelectedItem.Value) -StartMinute ([int]$plan.Start.SelectedItem.Value) -EndMinute ([int]$plan.End.SelectedItem.Value) -QuietConfirmSeconds ([int]$plan.Quiet.SelectedItem.Value) -ToastEnabled $settingsForm.Tag.Toast.Checked
             if(Get-Command Invoke-WorkstationWorker -ErrorAction SilentlyContinue){Invoke-WorkstationWorker -Restore}
-            $form.Close()
-        } catch {[void][Windows.Forms.MessageBox]::Show("保存失败: $_")}
-    }.GetNewClosure())
+            $settingsForm.Close()
+        } catch {Write-ProfileEvent 'settings.save.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage};[void][Windows.Forms.MessageBox]::Show("保存失败: $_")}
+    })
     if($ReturnForm){return $form}
     [void]$form.ShowDialog();if($form.Icon){$form.Icon.Dispose()};$form.Dispose()
 }

@@ -44,7 +44,9 @@ try {
     $dashboardInvoked=New-Object 'System.Collections.Generic.List[string]'
     $Script:DashboardActions=@{}
     foreach($key in @('Auto','Idle','Balanced','Game','Settings','Logs','Workstation','PauseWorkstation','Legacy','Exit')){
-        $captured=$key;$Script:DashboardActions[$key]={ $dashboardInvoked.Add($captured) }.GetNewClosure()
+        $item=New-Object Windows.Forms.ToolStripMenuItem $key;$item.Tag=@{Key=$key;Invoked=$dashboardInvoked}
+        $item.Add_Click({param($sender,$eventArgs) $sender.Tag.Invoked.Add($sender.Tag.Key)})
+        $Script:DashboardActions[$key]=$item
     }
     foreach($key in @('Auto','Idle','Balanced','Game','Settings','Logs')){$Script:Dashboard.Tag.Actions[$key].PerformClick()}
     foreach($item in $Script:Dashboard.Tag.MoreMenu.Items){$item.PerformClick()}
@@ -115,7 +117,10 @@ try {
     Assert-Equal 'UI loading leaves settings unchanged' (Get-FileHash $SettingsPath).Hash (Get-FileHash (Join-Path $project 'settings.example.json')).Hash
     . (Join-Path $project 'PowerProfileDetection.ps1')
     $before=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $settingsForm=Show-ModernSettings -ReturnForm
+    function Invoke-WorkstationWorker {param([switch]$Restore) $Script:fixtureRestorePath=Join-Path $ScriptDir 'PowerProfile.ps1'}
+    $Script:DashboardActions.Settings.Add_Click({$Script:routedSettingsForm=Show-ModernSettings -ReturnForm})
+    Invoke-DashboardAction Settings
+    $settingsForm=$Script:routedSettingsForm
     $settingsForm.Show();[Windows.Forms.Application]::DoEvents()
     $plan=$settingsForm.Tag.Plan
     Assert-Equal 'schedule dropdown defaults to statutory working days' $plan.Schedule.SelectedItem.Value 'ChineseWorkdays'
@@ -127,6 +132,8 @@ try {
     }
     $saveButton=@($settingsForm.Controls | Where-Object { $_ -is [Windows.Forms.Button] -and $_.Text -eq '保存' })[0]
     $saveButton.PerformClick()
+    Assert-Equal 'overview settings save restores overlay with valid worker path' $Script:fixtureRestorePath (Join-Path $project 'PowerProfile.ps1')
+    Assert-Equal 'successful save closes settings window' $settingsForm.Visible $false
     $after=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach($mode in @('Idle','Balanced','Game')) {
         Assert-Equal "modern UI save preserves CPU $mode" ($after.modes.$mode | ConvertTo-Json -Compress) ($before.modes.$mode | ConvertTo-Json -Compress)
@@ -142,6 +149,12 @@ try {
     Assert-Equal 'tray enable/pause preserves chosen date policy' $toggled.workstation.schedule 'EveryDay'
     Assert-Equal 'tray enable/pause preserves chosen interval' $toggled.workstation.endMinute 1440
     if($settingsForm.Icon){$settingsForm.Icon.Dispose()};$settingsForm.Dispose()
+    $directForm=Show-ModernSettings -ReturnForm;$directForm.Show();[Windows.Forms.Application]::DoEvents()
+    $Script:fixtureRestorePath=$null
+    @($directForm.Controls | Where-Object {$_ -is [Windows.Forms.Button] -and $_.Text -eq '保存'})[0].PerformClick()
+    Assert-Equal 'direct tray settings save retains installation path' $Script:fixtureRestorePath (Join-Path $project 'PowerProfile.ps1')
+    Assert-Equal 'direct settings save closes window' $directForm.Visible $false
+    if($directForm.Icon){$directForm.Icon.Dispose()};$directForm.Dispose()
 } finally {
     $resolved=[IO.Path]::GetFullPath($testRoot)
     $prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\PowerProfileUITests-'
