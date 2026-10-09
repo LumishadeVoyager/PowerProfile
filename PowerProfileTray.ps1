@@ -711,9 +711,7 @@ function Invoke-WorkstationWorker {
 }
 
 function Open-ProfileLog {
-    $path=Join-Path $ScriptDir ('logs\PowerProfile-'+(Get-Date).ToString('yyyy-MM-dd')+'.log')
-    if(-not (Test-Path $path)){Write-ProfileEvent 'log.open' '打开本日日志'}
-    if(Test-Path $path){Start-Process notepad.exe -ArgumentList ('"{0}"' -f $path)}
+    Show-ModernLogViewer
 }
 
 # === Show-Settings: 拖滑块 + 改模式名 + 其他设置 ==============================
@@ -1143,6 +1141,7 @@ $menuLog.Add_Click({
 $menuExit.Add_Click({
     Invoke-WorkstationWorker -Restore -RestoreReason '用户退出托盘'
     if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.Close()}
+    if($Script:LogViewer -and -not $Script:LogViewer.IsDisposed){$Script:LogViewer.Close()}
     Close-Toast
     $notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
@@ -1179,7 +1178,7 @@ $watchTimer.Interval = 500
 $watchTimer.Add_Tick({
     $request=Join-Path $ScriptDir 'tray_ui_request.txt'
     if(Test-Path $request){
-        try{$action=(Get-Content $request -Raw -Encoding UTF8).Trim();Remove-Item -LiteralPath $request;if($action -eq 'Dashboard'){Open-ModernDashboard}}catch{Write-ProfileEvent 'ui.request.failed' $_.Exception.Message 'ERROR'}
+        try{$action=(Get-Content $request -Raw -Encoding UTF8).Trim();Remove-Item -LiteralPath $request;if($action -eq 'Dashboard'){Open-ModernDashboard}elseif($action -eq 'Logs'){Show-ModernLogViewer}}catch{Write-ProfileEvent 'ui.request.failed' $_.Exception.Message 'ERROR'}
     }
     if (-not (Test-Path $StatePath)) { return }
     $writeTime = (Get-Item $StatePath).LastWriteTime

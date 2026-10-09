@@ -5,6 +5,8 @@
 $Script:ModernFont=New-Object Drawing.Font 'Microsoft YaHei UI',9
 $Script:Dashboard=$null
 $Script:TelemetryProcess=$null
+$Script:LogViewer=$null
+$Script:DashboardTip=New-Object Windows.Forms.ToolTip
 
 function Get-ModernUIOptions {
     $o=@{toastEnabled=$true}
@@ -55,8 +57,29 @@ function Initialize-ModernForm {
     $Form.Add_Shown({param($sender,$eventArgs) [ProfileVisual]::ActivateDashboard($sender.Handle)})
 }
 function Invoke-TelemetrySample {
-    if($Script:TelemetryProcess -and -not $Script:TelemetryProcess.HasExited){return}
+    if($Script:TelemetryProcess -and -not $Script:TelemetryProcess.HasExited){
+        if(([DateTime]::UtcNow-$Script:TelemetryStarted).TotalSeconds -lt 15){return}
+        $Script:TelemetryProcess.Kill()
+        Write-ProfileEvent 'telemetry.timeout' '只读采样超过 15 秒，已终止并重新采样' 'WARN'
+    }
+    if($Script:TelemetryProcess -and $Script:TelemetryProcess.HasExited -and $Script:TelemetryProcess.ExitCode -ne 0){Write-ProfileEvent 'telemetry.failed' '只读采样进程失败，将重试' 'WARN' @{exitCode=$Script:TelemetryProcess.ExitCode}}
+    if($Script:TelemetryProcess){$Script:TelemetryProcess.Dispose()}
+    $Script:TelemetryStarted=[DateTime]::UtcNow
     $Script:TelemetryProcess=Start-HiddenPowerShell @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $ScriptDir 'Read-SystemStatus.ps1')))
+}
+function Show-ModernLogViewer {
+    param([string]$Search='')
+    $ErrorActionPreference='Stop'
+    try{
+        if(-not ('ProfileLogViewer' -as [type])){Add-Type -Path (Join-Path $ScriptDir 'PowerProfileLogViewer.cs') -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Web.Extensions}
+        if(-not $Script:LogViewer -or $Script:LogViewer.IsDisposed){
+            $Script:LogViewer=New-Object ProfileLogViewer $ScriptDir
+            $Script:LogViewer.Icon.Dispose();$Script:LogViewer.Icon=[ProfileVisual]::CreateIcon('Balanced')
+            $Script:LogViewer.Add_FormClosed({$Script:LogViewer=$null})
+        }
+        if($Search){$Script:LogViewer.SelectSearch($Search)}
+        $Script:LogViewer.Show();[ProfileVisual]::ActivateDashboard($Script:LogViewer.Handle);$Script:LogViewer.Activate()
+    }catch{Write-ProfileEvent 'ui.log.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace};[void][Windows.Forms.MessageBox]::Show("日志窗口打开失败：$($_.Exception.Message)",'PowerProfile')}
 }
 function Update-ModernDashboard {
     if(-not $Script:Dashboard -or $Script:Dashboard.IsDisposed){return}
@@ -64,8 +87,10 @@ function Update-ModernDashboard {
     $mode=Get-CurrentMode
     $fields.mode.Text="$(if($Script:Settings.modes.ContainsKey($mode)){$Script:Settings.modes[$mode].name}else{$mode}) · $(if(Get-AutoEnabled){'自动'}else{'手动锁定'})"
     $d=Read-GameDetectionState
-    $fields.reason.Text=if($d.Fresh){$d.Reason}else{'检测结果暂不可用，保持原有控制逻辑'}
-    $fields.idle.Text="$(Get-UserActivityIdleSeconds) 秒（含远程输入）"
+    $fields.reason.Text=if($d.Fresh){([string]$d.Reason -split ';')[0]}else{'等待新一轮检测 · 原有控制逻辑保持'}
+    $Script:DashboardTip.SetToolTip($fields.reason,[string]$d.Reason)
+    $idleSeconds=Get-UserActivityIdleSeconds
+    $fields.idle.Text="$([int][Math]::Floor($idleSeconds/60)) 分 $($idleSeconds%60) 秒 · 含远程输入"
     $fields.limit.Text=if($Script:Settings.modes.ContainsKey($mode)){Format-Freq $Script:Settings.modes[$mode].freqMax}else{'--'}
     $fields.plan.Text='附加省电：等待检测'
     try{
@@ -74,49 +99,77 @@ function Update-ModernDashboard {
         $fields.plan.Text=if($age -gt 45){'附加省电：检测过期，等待恢复检查'}else{"附加省电：$(if($ws.active){'已生效'}else{'未生效'}) · $($ws.reason)"}
         if($ws.active){$fields.limit.Text="$($ws.freqMax) MHz（附加限制）"}
     }catch{}
+    $Script:DashboardTip.SetToolTip($fields.plan,$fields.plan.Text)
+    $j=$null
     try {
         $j=Get-Content (Join-Path $ScriptDir 'system_status.json') -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
         $age=([DateTime]::UtcNow-([DateTime]$j.observedAt).ToUniversalTime()).TotalSeconds
-        foreach($pair in @(@('cpu','cpu'),@('gpu','gpu3d'),@('video','videoEncode'),@('compute','compute'),@('memory','memoryPercent'))) {
-            $v=$j.($pair[1]);$fields[$pair[0]].Text=if($age -le 20 -and $null -ne $v){"$v%"}else{'暂不可用'}
-        }
-        if($age -le 20 -and $null -ne $j.memoryUsedGB){$fields.memory.Text+="  ($($j.memoryUsedGB)/$($j.memoryTotalGB) GB)"}
-        $fields.updated.Text=if($age -le 20){'实时采样 · 每 5 秒刷新'}else{'采样过期，等待下一次更新'}
-    } catch { $fields.updated.Text='正在读取系统信息...' }
+    } catch {$age=999999}
+    $degraded=$false
+    foreach($pair in @(@('cpu','cpu'),@('gpu','gpu3d'),@('video','videoEncode'),@('compute','compute'),@('memory','memoryPercent'))) {
+        $key=$pair[0];$metric=$pair[1];$v=$j.$metric;$metadata=$j.fieldStates.$metric
+        $valueAge=$age
+        if($metadata.observedAt){try{$valueAge=([DateTime]::UtcNow-([DateTime]$metadata.observedAt).ToUniversalTime()).TotalSeconds}catch{}}
+        $valid=($null -ne $v -and $valueAge -ge 0 -and $valueAge -le 60)
+        $stale=$valid -and ($valueAge -gt 15 -or $metadata.state -eq 'stale')
+        $fields[$key].Text=if($valid){"$v%$(if($stale){' · 旧值'})"}elseif($metadata.reason -match '驱动未提供'){'未提供'}else{'--'}
+        $fields[$key].ForeColor=if($stale -or -not $valid){[Drawing.Color]::FromArgb(133,142,150)}else{[Drawing.Color]::FromArgb(42,55,67)}
+        $bar=$Script:Dashboard.Tag.Bars[$key];$bar.Percent=if($valid){[double]$v}else{-1}
+        $bar.ForeColor=if($stale){[Drawing.Color]::FromArgb(163,177,188)}else{[Drawing.Color]::FromArgb(39,106,159)}
+        $stamp=if($metadata.observedAt){$metadata.observedAt}else{$j.observedAt}
+        $hint=if($stale){"最近有效值：$(([DateTime]$stamp).ToLocalTime().ToString('HH:mm:ss'))`r`n$($metadata.reason)"}elseif(-not $valid){$(if($metadata.reason){$metadata.reason}else{'等待有效采样'})}else{'实时采样'}
+        $Script:DashboardTip.SetToolTip($fields[$key],$hint);$Script:DashboardTip.SetToolTip($bar,$hint)
+        if($stale -or -not $valid){$degraded=$true}
+    }
+    if($null -ne $j.memoryUsedGB -and $age -le 60){$fields.memory.Text+=" · $($j.memoryUsedGB) GB";$Script:DashboardTip.SetToolTip($fields.memory,"已用 $($j.memoryUsedGB) GB / 总计 $($j.memoryTotalGB) GB")}
+    $fields.updated.Text=if($age -le 15){"更新 $(([DateTime]$j.observedAt).ToLocalTime().ToString('HH:mm:ss'))$(if($j.stage -eq 'gpu-loading'){' · GPU 刷新中'}elseif($degraded){' · 部分指标有说明'})"}else{'采样延迟 · 正在自动重试'}
 }
 function Show-ModernDashboard {
-    if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.WindowState='Normal';$Script:Dashboard.Show();[ProfileVisual]::ActivateDashboard($Script:Dashboard.Handle);$Script:Dashboard.BringToFront();$Script:Dashboard.Activate();return}
+    if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.WindowState='Normal';$Script:Dashboard.Show();[ProfileVisual]::ActivateDashboard($Script:Dashboard.Handle);$Script:Dashboard.Activate();return}
     $form=New-Object Windows.Forms.Form
-    Initialize-ModernForm $form 'PowerProfile · 运行状态' 460 480
+    Initialize-ModernForm $form 'PowerProfile · 运行状态' 480 524
     $form.ShowInTaskbar=$true
-    $fields=@{}
-    $fields.mode=New-ModernLabel '' 18 18 425
-    $fields.mode.Font=New-Object Drawing.Font 'Microsoft YaHei UI',10,([Drawing.FontStyle]::Bold)
-    $fields.reason=New-ModernLabel '' 18 48 425;$fields.reason.Height=42
-    $form.Controls.Add($fields.mode);$form.Controls.Add($fields.reason)
-    $y=98
-    foreach($row in @(@('CPU 占用','cpu'),@('GPU 3D','gpu'),@('视频编码','video'),@('GPU 计算','compute'),@('内存','memory'),@('CPU 频率上限','limit'),@('无输入时长','idle'))) {
-        $label=New-ModernLabel $row[0] 18 $y 130
-        $value=New-ModernLabel '--' 148 $y 294;$value.TextAlign='TopRight'
-        $form.Controls.Add($label);$form.Controls.Add($value);$fields[$row[1]]=$value;$y+=32
+    $fields=@{};$bars=@{}
+    $accent=New-Object Windows.Forms.Panel;$accent.BackColor=[Drawing.Color]::FromArgb(39,106,159);$accent.SetBounds(18,20,4,49);$form.Controls.Add($accent)
+    $fields.mode=New-ModernLabel '' 34 17 425
+    $fields.mode.Height=32;$fields.mode.Font=New-Object Drawing.Font 'Microsoft YaHei UI',14,([Drawing.FontStyle]::Bold)
+    $subtitle=New-ModernLabel '运行状态 · 按需系统监测' 34 51 410;$subtitle.ForeColor=[Drawing.Color]::FromArgb(111,122,132)
+    $fields.reason=New-ModernLabel '' 18 82 443;$fields.reason.AutoEllipsis=$true
+    $form.Controls.Add($fields.mode);$form.Controls.Add($subtitle);$form.Controls.Add($fields.reason)
+    $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds(12,116,456,195);$form.Controls.Add($card)
+    $y=12
+    foreach($row in @(@('CPU','cpu'),@('GPU 3D','gpu'),@('视频编码','video'),@('GPU 计算','compute'),@('内存','memory'))){
+        $caption=New-ModernLabel $row[0] 14 $y 87;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118)
+        $bar=New-Object ProfileMetricBar;$bar.SetBounds(107,($y+5),185,10);$bar.ForeColor=[Drawing.Color]::FromArgb(39,106,159)
+        $value=New-ModernLabel '--' 299 $y 141;$value.TextAlign='TopRight'
+        $card.Controls.Add($caption);$card.Controls.Add($bar);$card.Controls.Add($value)
+        $fields[$row[1]]=$value;$bars[$row[1]]=$bar;$y+=36
     }
-    $fields.plan=New-ModernLabel '' 18 332 425;$fields.plan.Height=44;$form.Controls.Add($fields.plan)
-    $stable=New-ModernLabel '稳定参数沿用原配置 · 不修改 C-state' 18 382 425
-    $stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$form.Controls.Add($stable)
-    $fields.updated=New-ModernLabel '' 18 434 280;$form.Controls.Add($fields.updated)
-    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(356,424,85,30);$form.Controls.Add($close)
+    $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,325,456,151);$form.Controls.Add($details)
+    foreach($row in @(@('CPU 频率上限','limit',13),@('无输入时长','idle',47))){
+        $caption=New-ModernLabel $row[0] 14 $row[2] 120;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118)
+        $value=New-ModernLabel '--' 135 $row[2] 305;$value.TextAlign='TopRight'
+        $details.Controls.Add($caption);$details.Controls.Add($value);$fields[$row[1]]=$value
+    }
+    $fields.plan=New-ModernLabel '' 14 83 428;$fields.plan.Height=38;$fields.plan.AutoEllipsis=$true;$details.Controls.Add($fields.plan)
+    $stable=New-ModernLabel '稳定参数保留 · C-state 不作更改' 14 124 428;$stable.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$details.Controls.Add($stable)
+    $fields.updated=New-ModernLabel '' 18 492 273;$fields.updated.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.updated)
+    $log=New-Object Windows.Forms.Button;$log.Text='查看日志';$log.SetBounds(292,485,82,29);$log.FlatStyle='Flat';$log.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($log);$log.Add_Click({Show-ModernLogViewer})
+    $close=New-Object Windows.Forms.Button;$close.Text='关闭';$close.SetBounds(384,485,78,29);$close.FlatStyle='Flat';$close.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(217,225,231);$form.Controls.Add($close)
     $close.Add_Click({$Script:Dashboard.Close()})
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=5000
-    $timer.Add_Tick({try{Invoke-TelemetrySample;Update-ModernDashboard}catch{Write-ProfileEvent 'ui.dashboard.refresh.failed' $_.Exception.Message 'ERROR'}})
-    $form.Tag=@{Fields=$fields;Timer=$timer}
+    $timer.Add_Tick({try{Invoke-TelemetrySample;Update-ModernDashboard}catch{Write-ProfileEvent 'ui.dashboard.refresh.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace}}})
+    $form.Tag=@{Fields=$fields;Bars=$bars;Timer=$timer}
     $form.Add_FormClosed({
         param($sender,$eventArgs)
         $sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose()
+        if($Script:TelemetryProcess -and -not $Script:TelemetryProcess.HasExited){try{$Script:TelemetryProcess.Kill()}catch{}}
+        if($Script:TelemetryProcess){$Script:TelemetryProcess.Dispose();$Script:TelemetryProcess=$null}
         if($sender.Icon){$sender.Icon.Dispose()}
         $Script:Dashboard=$null
     })
     $Script:Dashboard=$form;Invoke-TelemetrySample;Update-ModernDashboard
-    $timer.Start();$form.TopMost=$true;$form.Show();[ProfileVisual]::ActivateDashboard($form.Handle);$form.BringToFront();$form.Activate();$form.TopMost=$false
+    $timer.Start();$form.TopMost=$true;$form.Show();[ProfileVisual]::ActivateDashboard($form.Handle);$form.Activate();$form.TopMost=$false
 }
 
 function Show-ModernSettings {
