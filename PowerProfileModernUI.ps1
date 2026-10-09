@@ -16,17 +16,34 @@ function Get-ModernUIOptions {
     return $o
 }
 function Save-WorkstationOptions {
-    param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='')
+    param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='',[int]$AwayMinutes,[string]$Schedule,[int]$StartMinute,[int]$EndMinute,[int]$QuietConfirmSeconds,$ToastEnabled=$null)
     $json=Read-AtomicJson $SettingsPath
+    $options=Get-WorkstationOptions $json
+    foreach($key in @('AwayMinutes','Schedule','StartMinute','EndMinute','QuietConfirmSeconds')){if($PSBoundParameters.ContainsKey($key)){$options[$key]=$PSBoundParameters[$key]}}
+    $checked=Get-WorkstationOptions ([PSCustomObject]@{workstation=[PSCustomObject]$options})
+    if(-not $checked.scheduleValid){throw '请选择有效日期、1–240 分钟等待、同一天的开始/结束时间，以及至少 10 秒的低负载确认时间。'}
     $minimum=[int]$json.modes.Idle.min
     $base=[int]$json.processorBaseMHz
     if($Enabled -and ($base -le 0 -or $Frequency -lt 500 -or $Frequency -ge $json.modes.Idle.freqMax -or [Math]::Floor(100*$Frequency/$base) -lt $minimum+5)){throw '频率必须低于静音档，且保持原最低处理器比例；请先校准基频。'}
     $w=if($json.workstation){$json.workstation}else{[PSCustomObject]@{}}
-    foreach($pair in @(@('enabled',$Enabled),@('freqMax',$Frequency),@('awayMinutes',20),@('pausedUntil',$PausedUntil))){$w | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force}
+    foreach($pair in @(@('enabled',$Enabled),@('freqMax',$Frequency),@('awayMinutes',$checked.awayMinutes),@('schedule',$checked.schedule),@('startMinute',$checked.startMinute),@('endMinute',$checked.endMinute),@('quietConfirmSeconds',$checked.quietConfirmSeconds),@('pausedUntil',$PausedUntil))){$w | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force}
     $json | Add-Member -NotePropertyName workstation -NotePropertyValue $w -Force
+    if($ToastEnabled -is [bool]){
+        $ui=if($json.ui){$json.ui}else{[PSCustomObject]@{}}
+        $ui | Add-Member -NotePropertyName toastEnabled -NotePropertyValue $ToastEnabled -Force
+        $json | Add-Member -NotePropertyName ui -NotePropertyValue $ui -Force
+    }
     Write-AtomicJson $SettingsPath $json -Pretty
     $Script:ProfileSettingsHash=Get-ProfileFileHash $SettingsPath
-    Write-ProfileEvent 'settings.workstation.saved' '保存附加省电配置' -Data @{enabled=$Enabled;freqMax=$Frequency;awayMinutes=20;pausedUntil=$PausedUntil}
+    Write-ProfileEvent 'settings.workstation.saved' '保存附加省电配置' -Data @{enabled=$Enabled;freqMax=$Frequency;awayMinutes=$checked.awayMinutes;schedule=$checked.schedule;startMinute=$checked.startMinute;endMinute=$checked.endMinute;quietConfirmSeconds=$checked.quietConfirmSeconds;pausedUntil=$PausedUntil}
+}
+function New-WorkstationCombo {
+    param($Parent,[int]$X,[int]$Y,[int]$Width,$Choices,$Selected)
+    $combo=New-Object Windows.Forms.ComboBox;$combo.DropDownStyle='DropDownList';$combo.DisplayMember='Label';$combo.SetBounds($X,$Y,$Width,27)
+    foreach($choice in $Choices){[void]$combo.Items.Add([PSCustomObject]@{Value=$choice[0];Label=[string]$choice[1]})}
+    for($i=0;$i -lt $combo.Items.Count;$i++){if([string]$combo.Items[$i].Value -eq [string]$Selected){$combo.SelectedIndex=$i;break}}
+    if($combo.SelectedIndex -lt 0){$combo.SelectedIndex=$combo.Items.Add([PSCustomObject]@{Value=$Selected;Label="当前配置：$Selected"})}
+    $Parent.Controls.Add($combo);return $combo
 }
 function Open-ModernDashboard {
     $ErrorActionPreference='Stop'
@@ -230,8 +247,8 @@ try {Initialize-EnergyService} catch {Write-ProfileEvent 'energy.start.failed' '
 function Show-ModernSettings {
     param([switch]$ReturnForm)
     $form=New-Object Windows.Forms.Form
-    Initialize-ModernForm $form 'PowerProfile · 设置' 480 395
-    $tabs=New-Object Windows.Forms.TabControl;$tabs.SetBounds(12,12,456,326)
+    Initialize-ModernForm $form 'PowerProfile · 设置' 480 480
+    $tabs=New-Object Windows.Forms.TabControl;$tabs.SetBounds(12,12,456,412)
     $general=New-Object Windows.Forms.TabPage;$general.Text='常规'
     $plan=New-Object Windows.Forms.TabPage;$plan.Text='省电计划'
     $protect=New-Object Windows.Forms.TabPage;$protect.Text='应用保护'
@@ -247,25 +264,38 @@ function Show-ModernSettings {
     $general.Controls.Add((New-ModernLabel '旧版代码与上线前配置独立保存，可随时返回。' 18 232 410))
     $w=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
     $enabled=New-Object Windows.Forms.CheckBox;$enabled.Text='启用工作时段附加省电';$enabled.Checked=$w.enabled;$enabled.SetBounds(18,15,370,26);$plan.Controls.Add($enabled)
-    $plan.Controls.Add((New-ModernLabel 'CPU 上限（MHz）' 18 55 180))
-    $frequency=New-Object Windows.Forms.NumericUpDown;$frequency.Minimum=500;$frequency.Maximum=10000;$frequency.Increment=100;$frequency.Value=$w.freqMax;$frequency.SetBounds(230,55,140,26);$plan.Controls.Add($frequency)
-    $y=98
-    foreach($text in @('国内法定工作日（含调休） · 10:00–18:00','本机或远程输入后，重新等待 20 分钟','18:00 撤销附加参数，游戏及手动档位优先','只修改交流电 CPU 上限；保留稳定参数','频率过低或本年度日历缺失时不生效')) {
-        $plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38
+    $plan.Controls.Add((New-ModernLabel '生效日期' 18 57 130))
+    $schedule=New-WorkstationCombo $plan 165 55 253 @(@('ChineseWorkdays','国内法定工作日（含调休）'),@('Weekdays','周一至周五（不看调休）'),@('EveryDay','每天'),@('Weekends','周六、周日'),@('HolidayOnly','国内节假日休假安排')) $w.schedule
+    $Script:DashboardTip.SetToolTip($schedule,'法定工作日和节假日需要本年度日历；每天、周一至周五及周末不依赖日历。')
+    $plan.Controls.Add((New-ModernLabel '无输入后等待' 18 101 135))
+    $awayChoices=@();foreach($minutes in @(1,5,10,15,20,30,45,60,90,120)){$awayChoices+=,@($minutes,"$minutes 分钟")}
+    $away=New-WorkstationCombo $plan 230 99 188 $awayChoices $w.awayMinutes
+    $plan.Controls.Add((New-ModernLabel '生效时段' 18 145 130))
+    $startChoices=@();$endChoices=@()
+    for($minute=0;$minute -le 1440;$minute+=30){$entry=@($minute,(Format-WorkstationTime $minute));$endChoices+=,@($entry);if($minute -lt 1440){$startChoices+=,@($entry)}}
+    $start=New-WorkstationCombo $plan 165 143 113 $startChoices $w.startMinute
+    $plan.Controls.Add((New-ModernLabel '至' 282 145 26))
+    $end=New-WorkstationCombo $plan 309 143 109 $endChoices $w.endMinute
+    $Script:DashboardTip.SetToolTip($end,'北京时间，同一天的起止时段；选择 00:00–24:00 可全天生效。')
+    $plan.Controls.Add((New-ModernLabel 'CPU 上限' 18 189 130))
+    $json=Read-AtomicJson $SettingsPath;$frequencyChoices=@()
+    foreach($mhz in @(500,800,1000,1200,1400,1500,1600,1700,1800,1900,2000,2100,2200,2400,2600,2800,3000)){
+        if($json.processorBaseMHz -gt 0 -and $mhz -lt $json.modes.Idle.freqMax -and [Math]::Floor(100*$mhz/$json.processorBaseMHz) -ge $json.modes.Idle.min+5){$frequencyChoices+=,@($mhz,"$mhz MHz")}
     }
+    $frequency=New-WorkstationCombo $plan 230 187 188 $frequencyChoices $w.freqMax
+    $plan.Controls.Add((New-ModernLabel '低负载持续确认' 18 233 160))
+    $quiet=New-WorkstationCombo $plan 230 231 188 @(@(10,'至少 10 秒'),@(20,'至少 20 秒'),@(30,'至少 30 秒'),@(60,'至少 60 秒')) $w.quietConfirmSeconds
+    $y=279
+    foreach($text in @('时段采用北京时间；结束时撤销附加参数','游戏、高负载和手动档位始终优先','仅调整交流电上限；保留 C-state 等稳定参数')){$plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=31}
+    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;Start=$start;End=$end;Frequency=$frequency;Quiet=$quiet}}
     $y=18
     foreach($text in @('游戏主体进程存在时，禁止附加省电','暂不添加剪辑、建模软件进程名单','CPU 总占用 ≥25% 或单进程 ≥10% 阻止','单进程占用 ≥70% 的一核算力也阻止','任一 GPU 引擎 ≥15% 时阻止','检查失败不进入；低负载需连续两次确认')) {
         $protect.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38
     }
-    $save=New-Object Windows.Forms.Button;$save.Text='保存';$save.SetBounds(368,350,100,30);$form.Controls.Add($save)
+    $save=New-Object Windows.Forms.Button;$save.Text='保存';$save.SetBounds(368,440,100,30);$form.Controls.Add($save)
     $save.Add_Click({
         try {
-            $json=if(Test-Path $SettingsPath){Read-AtomicJson $SettingsPath}else{[PSCustomObject]@{}}
-            $ui=if($json.ui){$json.ui}else{[PSCustomObject]@{}}
-            $ui | Add-Member -NotePropertyName toastEnabled -NotePropertyValue $toast.Checked -Force
-            $json | Add-Member -NotePropertyName ui -NotePropertyValue $ui -Force
-            Write-AtomicJson $SettingsPath $json -Pretty
-            Save-WorkstationOptions $enabled.Checked ([int]$frequency.Value) ''
+            Save-WorkstationOptions $enabled.Checked ([int]$frequency.SelectedItem.Value) '' -AwayMinutes ([int]$away.SelectedItem.Value) -Schedule ([string]$schedule.SelectedItem.Value) -StartMinute ([int]$start.SelectedItem.Value) -EndMinute ([int]$end.SelectedItem.Value) -QuietConfirmSeconds ([int]$quiet.SelectedItem.Value) -ToastEnabled $toast.Checked
             if(Get-Command Invoke-WorkstationWorker -ErrorAction SilentlyContinue){Invoke-WorkstationWorker -Restore}
             $form.Close()
         } catch {[void][Windows.Forms.MessageBox]::Show("保存失败: $_")}

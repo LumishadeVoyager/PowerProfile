@@ -1,19 +1,29 @@
 ﻿# Independent overlay policy; dot-sourcing does not read sensors or apply power settings.
 function Get-WorkstationOptions {
     param($Json)
-    $options=@{enabled=$false;freqMax=1800;awayMinutes=20;cpuThreshold=25.0;processCpuThreshold=10.0;singleCoreThreshold=70.0;gpuThreshold=15.0;protectedProcesses=@();pausedUntil=''}
+    $options=@{enabled=$false;freqMax=1800;awayMinutes=20;schedule='ChineseWorkdays';startMinute=600;endMinute=1080;quietConfirmSeconds=10;scheduleValid=$true;cpuThreshold=25.0;processCpuThreshold=10.0;singleCoreThreshold=70.0;gpuThreshold=15.0;protectedProcesses=@();pausedUntil=''}
     if($Json.workstation){
         $w=$Json.workstation
         if($w.enabled -is [bool]){$options.enabled=$w.enabled}
-        foreach($k in @('freqMax','awayMinutes','cpuThreshold','processCpuThreshold','singleCoreThreshold','gpuThreshold')){
+        foreach($k in @('freqMax','cpuThreshold','processCpuThreshold','singleCoreThreshold','gpuThreshold')){
             $n=$w.$k -as [double]
             if($null -ne $n -and $n -gt 0){$options[$k]=$n}
         }
+        if($null -ne $w.schedule){if($w.schedule -in @('ChineseWorkdays','Weekdays','EveryDay','Weekends','HolidayOnly')){$options.schedule=[string]$w.schedule}else{$options.scheduleValid=$false}}
+        foreach($k in @('awayMinutes','startMinute','endMinute','quietConfirmSeconds')){
+            if($null -ne $w.$k){
+                $n=$w.$k -as [double]
+                if($w.$k -is [bool] -or $null -eq $n -or [double]::IsNaN($n) -or [double]::IsInfinity($n) -or $n -ne [Math]::Floor($n) -or $n -gt [int]::MaxValue -or $n -lt [int]::MinValue){$options.scheduleValid=$false;continue}
+                $options[$k]=[int]$n
+            }
+        }
+        if($options.awayMinutes -lt 1 -or $options.awayMinutes -gt 240 -or $options.startMinute -lt 0 -or $options.endMinute -gt 1440 -or $options.startMinute -ge $options.endMinute -or $options.quietConfirmSeconds -lt 10 -or $options.quietConfirmSeconds -gt 120){$options.scheduleValid=$false}
         $options.protectedProcesses=@($w.protectedProcesses | Where-Object {$_ -is [string] -and $_.Trim()} | ForEach-Object {$_.Trim() -replace '\.exe$',''})
         $options.pausedUntil=[string]$w.pausedUntil
     }
     return $options
 }
+function Format-WorkstationTime {param([int]$Minute);return ('{0:D2}:{1:D2}' -f ([int][Math]::Floor($Minute/60)),($Minute%60))}
 function Get-BeijingTime {return [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time'))}
 function Test-ChineseWorkingDate {
     param([DateTime]$Date,$Calendar)
@@ -29,9 +39,19 @@ function Get-WorkstationDecision {
     if($Options.pausedUntil){try{if($Now -lt [DateTime]::Parse($Options.pausedUntil)){return 'Paused'}}catch{return 'InvalidPause'}}
     if(-not $OnAC){return 'Battery'}
     if(-not $AutoEnabled -or $Mode -ne 'Idle'){return 'ModeProtected'}
-    if(-not $Calendar -or $Calendar.year -ne $Now.Year){return 'CalendarUnavailable'}
-    if(-not (Test-ChineseWorkingDate $Now $Calendar)){return 'Holiday'}
-    if($Now.TimeOfDay -lt [TimeSpan]::FromHours(10) -or $Now.TimeOfDay -ge [TimeSpan]::FromHours(18)){return 'OutsideHours'}
+    if(-not $Options.scheduleValid){return 'InvalidSchedule'}
+    if($Options.schedule -in @('ChineseWorkdays','HolidayOnly') -and (-not $Calendar -or $Calendar.year -ne $Now.Year)){return 'CalendarUnavailable'}
+    $weekend=$Now.DayOfWeek -in @([DayOfWeek]::Saturday,[DayOfWeek]::Sunday)
+    $dayAllowed=switch($Options.schedule){
+        'ChineseWorkdays'{Test-ChineseWorkingDate $Now $Calendar}
+        'Weekdays'{-not $weekend}
+        'Weekends'{$weekend}
+        'HolidayOnly'{@($Calendar.holidays) -contains $Now.ToString('yyyy-MM-dd')}
+        'EveryDay'{$true}
+        default{$false}
+    }
+    if(-not $dayAllowed){return 'Holiday'}
+    if($Now.TimeOfDay.TotalMinutes -lt $Options.startMinute -or $Now.TimeOfDay.TotalMinutes -ge $Options.endMinute){return 'OutsideHours'}
     if($IdleSeconds -lt $Options.awayMinutes*60){return 'RecentInput'}
     if(-not $StableSettings){return 'StabilityGuard'}
     if(-not $Safety -or -not $Safety.Known){return 'SafetyUnavailable'}
@@ -42,7 +62,13 @@ function Get-WorkstationDecision {
     return 'Eligible'
 }
 function Get-WorkstationReason {
-    param([string]$Code)
+    param([string]$Code,$Options=$null)
+    if(-not $Options){$Options=Get-WorkstationOptions $null}
+    if($Code -eq 'OutsideHours'){return "不在 $(Format-WorkstationTime $Options.startMinute)–$(Format-WorkstationTime $Options.endMinute)"}
+    if($Code -eq 'RecentInput'){return "本机或远程输入后未满 $($Options.awayMinutes) 分钟"}
+    if($Code -eq 'Holiday'){return '不在所选生效日期范围'}
+    if($Code -eq 'Eligible'){return '满足省电时段，离开且持续低负载'}
+    if($Code -eq 'InvalidSchedule'){return '省电日期、时段或等待时长配置无效'}
     $reasons=@{Disabled='已关闭';Paused='今天已暂停';InvalidPause='暂停时间无效';Battery='未接交流电';ModeProtected='游戏、均衡或手动档位优先';CalendarUnavailable='本年度日历不可用';Holiday='节假日或休息日';OutsideHours='不在 10:00–18:00';RecentInput='本机或远程输入后未满 20 分钟';StabilityGuard='稳定参数校验不通过';SafetyUnavailable='安全检测数据不可用';GamePresent='游戏进程存在';ProtectedProcess='保护进程存在';HighLoad='检测到高负载';ConfirmingQuiet='正在确认持续低负载';Eligible='工作日离开且持续低负载'}
     if($reasons.ContainsKey($Code)){return $reasons[$Code]};return $Code
 }
@@ -181,7 +207,7 @@ function Invoke-WorkstationEvaluation {
     $freq=$options.freqMax
     $minimum=$json.modes.Idle.min -as [int]
     $cap=if($baseMHz -gt 0){[int][Math]::Floor(100*$freq/$baseMHz)}else{0}
-    $valid=($freq -ge 500 -and $freq -lt $json.modes.Idle.freqMax -and $freq -le 10000 -and $minimum -ge 5 -and $cap -ge $minimum+5 -and $cap -le 100 -and $options.awayMinutes -ge 20)
+    $valid=($freq -ge 500 -and $freq -lt $json.modes.Idle.freqMax -and $freq -le 10000 -and $minimum -ge 5 -and $cap -ge $minimum+5 -and $cap -le 100 -and $options.scheduleValid)
     $preflight=Get-WorkstationDecision $options $now $calendar $onAC $auto $CurrentMode $idle $null $valid $false
     if($valid -and ($preflight -eq 'SafetyUnavailable' -or $previous.active)){
         try{$baseline=Read-WorkstationPowerValues;$stable=$baseline.values['5d76a2ca-e8c0-402f-a133-2158492d58ad'] -eq 1 -and $baseline.dcIdleDisable -eq 1 -and $cap -ge $baseline.values['893dee8e-2bef-41e0-89c6-b55d0929964c']+5}catch{}
@@ -192,14 +218,15 @@ function Invoke-WorkstationEvaluation {
     # Input and power source are refreshed after the expensive sample.
     $inputState=Get-WorkstationInputState
     $idle=$inputState.IdleSeconds;$onAC=$inputState.OnAC;$now=Get-BeijingTime
-    $quietContinuous=($previous -and $previous.code -in @('ConfirmingQuiet','Eligible') -and $previous.lastQuietAt -and ([DateTime]::UtcNow-([DateTime]$previous.lastQuietAt).ToUniversalTime()).TotalSeconds -le 45)
-    $quietConfirmed=($quietContinuous -and $previous.quietSince -and ([DateTime]::UtcNow-([DateTime]$previous.quietSince).ToUniversalTime()).TotalSeconds -ge 10)
+    $policyKey=@($options.schedule,$options.startMinute,$options.endMinute,$options.awayMinutes,$options.quietConfirmSeconds,$freq) -join ':'
+    $quietContinuous=($previous -and $previous.policyKey -eq $policyKey -and $previous.code -in @('ConfirmingQuiet','Eligible') -and $previous.lastQuietAt -and ([DateTime]::UtcNow-([DateTime]$previous.lastQuietAt).ToUniversalTime()).TotalSeconds -le 45)
+    $quietConfirmed=($quietContinuous -and $previous.quietSince -and ([DateTime]::UtcNow-([DateTime]$previous.quietSince).ToUniversalTime()).TotalSeconds -ge $options.quietConfirmSeconds)
     $code=Get-WorkstationDecision $options $now $calendar $onAC $auto $CurrentMode $idle $safety $stable $quietConfirmed
-    $reason=Get-WorkstationReason $code
+    $reason=Get-WorkstationReason $code $options
     if($code -in @('GamePresent','ProtectedProcess') -and $safety.Process){$reason+='：'+$safety.Process}
     if($code -eq 'SafetyUnavailable' -and $safety.UnknownProcesses){$reason+='：无法读取 '+($safety.UnknownProcesses -join ', ')}
     if($code -ne 'Eligible' -and $previous.active){Restore-WorkstationOverlay $Root $reason;$previous=Read-AtomicJson $path}
-    $state=@{active=[bool]$previous.active;code=$code;reason=$reason;observedAt=[DateTime]::UtcNow.ToString('o');idleSeconds=$idle;freqMax=$freq;operationId=$Script:ProfileOperationId;safety=$safety;lastQuietAt=$null;quietSince=$null;baseline=$previous.baseline}
+    $state=@{active=[bool]$previous.active;code=$code;reason=$reason;observedAt=[DateTime]::UtcNow.ToString('o');idleSeconds=$idle;freqMax=$freq;policyKey=$policyKey;operationId=$Script:ProfileOperationId;safety=$safety;lastQuietAt=$null;quietSince=$null;baseline=$previous.baseline}
     if($code -in @('ConfirmingQuiet','Eligible')){
         $state.lastQuietAt=[DateTime]::UtcNow.ToString('o')
         $state.quietSince=if($quietContinuous -and $previous.quietSince){$previous.quietSince}else{[DateTime]::UtcNow.ToString('o')}

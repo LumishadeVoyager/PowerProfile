@@ -10,7 +10,8 @@ function Initialize-EnergyService {
         $usings=([regex]::Matches(($store+"`r`n"+$source),'(?m)^using [^;]+;') | ForEach-Object {$_.Value} | Select-Object -Unique) -join "`r`n"
         Add-Type -TypeDefinition ($usings+"`r`n"+(($store+"`r`n"+$source) -replace '(?m)^using ([^;]+);','')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Web.Extensions,System.Security -ErrorAction Stop
     }
-    $Script:EnergyService=New-Object ProfileEnergyService $ScriptDir
+    $dataRoot=if($SettingsPath){Split-Path -Parent $SettingsPath}else{$ScriptDir}
+    $Script:EnergyService=New-Object ProfileEnergyService $dataRoot
     $Script:EnergyLogTimer=New-Object Windows.Forms.Timer
     $Script:EnergyLogTimer.Interval=10000
     $Script:EnergyLogTimer.Add_Tick({

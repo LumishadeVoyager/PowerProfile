@@ -1210,10 +1210,10 @@ $Script:WorkstationTimer.Add_Tick({
         $active=$false
         $wsPath=Join-Path $ScriptDir 'workstation_state.json'
         if(Test-Path $wsPath){$active=[bool](Read-AtomicJson $wsPath).active}
-        if($active -and ((Get-UserActivityIdleSeconds) -lt 1200 -or -not (Get-AutoEnabled))){Invoke-WorkstationWorker -Restore -RestoreReason '本机或远程输入，或用户退出自动调节';return}
-        if(-not $active -and ((Get-UserActivityIdleSeconds) -lt 1200 -or -not (Get-AutoEnabled) -or (Get-CurrentMode) -ne 'Idle')){return}
         $options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
-        if(-not $active -and -not $options.enabled){return}
+        $blocked=(-not $options.enabled -or -not $options.scheduleValid -or (Get-UserActivityIdleSeconds) -lt $options.awayMinutes*60 -or -not (Get-AutoEnabled) -or (Get-CurrentMode) -ne 'Idle')
+        if($active -and $blocked){Invoke-WorkstationWorker -Restore -RestoreReason '输入或用户配置变化，退出附加省电';return}
+        if(-not $active -and $blocked){return}
         if(([DateTime]::UtcNow-$Script:LastWorkstationCheck).TotalSeconds -ge 10){
             $Script:LastWorkstationCheck=[DateTime]::UtcNow
             Invoke-WorkstationWorker

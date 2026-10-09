@@ -15,6 +15,32 @@ $safe=@{Known=$true;Game=$false;Protected=$false;Cpu=0;ProcessCpu=0;SingleCore=0
 function Decide($Time='2026-10-09T12:00:00',$Idle=1200,$Safety=$safe,$Stable=$true,$AC=$true,$Auto=$true,$Mode='Idle',$Quiet=$true){return Get-WorkstationDecision $o ([DateTime]$Time) $calendar $AC $Auto $Mode $Idle $Safety $Stable $Quiet}
 Assert-Equal 'ten AM inclusive' (Decide '2026-10-09T10:00:00') 'Eligible'
 Assert-Equal 'six PM exclusive' (Decide '2026-10-09T18:00:00') 'OutsideHours'
+Assert-Equal 'old settings keep statutory working days' $o.schedule 'ChineseWorkdays'
+$old=$o.Clone()
+$o.schedule='EveryDay';$o.awayMinutes=5;$o.startMinute=0;$o.endMinute=1440
+Assert-Equal 'daily applies on holiday' (Decide '2026-10-01T12:00:00' -Idle 300) 'Eligible'
+Assert-Equal 'daily applies Sunday without yearly calendar' (Decide '2027-10-10T23:59:59' -Idle 300) 'Eligible'
+Assert-Equal 'custom wait cannot enter one second early' (Decide '2026-10-01T12:00:00' -Idle 299) 'RecentInput'
+Assert-Equal 'custom wait explanation follows setting' (Get-WorkstationReason RecentInput $o) '本机或远程输入后未满 5 分钟'
+$o.schedule='Weekdays'
+Assert-Equal 'weekday schedule ignores holiday calendar' (Decide '2026-10-01T12:00:00' -Idle 300) 'Eligible'
+Assert-Equal 'weekday schedule excludes makeup Saturday' (Decide '2026-10-10T12:00:00' -Idle 300) 'Holiday'
+$o.schedule='Weekends'
+Assert-Equal 'weekend applies to makeup Saturday by weekday' (Decide '2026-10-10T12:00:00' -Idle 300) 'Eligible'
+$o.schedule='HolidayOnly'
+Assert-Equal 'holiday-only uses holiday dates' (Decide '2026-10-01T12:00:00' -Idle 300) 'Eligible'
+Assert-Equal 'holiday-only excludes working dates' (Decide '2026-10-09T12:00:00' -Idle 300) 'Holiday'
+Assert-Equal 'holiday-only still requires matching calendar' (Decide '2027-10-01T12:00:00' -Idle 300) 'CalendarUnavailable'
+$o=$old.Clone();$o.startMinute=540;$o.endMinute=1020
+Assert-Equal 'custom start inclusive' (Decide '2026-10-09T09:00:00') 'Eligible'
+Assert-Equal 'custom end exclusive' (Decide '2026-10-09T17:00:00') 'OutsideHours'
+Assert-Equal 'custom time explanation follows setting' (Get-WorkstationReason OutsideHours $o) '不在 09:00–17:00'
+foreach($invalid in @(@{startMinute=1080;endMinute=600},@{schedule='Unknown'},@{awayMinutes=0},@{quietConfirmSeconds=1},@{awayMinutes=1.5},@{awayMinutes=1e20})){
+    $bad=@{enabled=$true};foreach($key in $invalid.Keys){$bad[$key]=$invalid[$key]}
+    $o=Get-WorkstationOptions ([PSCustomObject]@{workstation=[PSCustomObject]$bad})
+    Assert-Equal 'invalid schedule fails closed' (Decide) 'InvalidSchedule'
+}
+$o=$old.Clone()
 Assert-Equal 'nineteen minutes cannot enter' (Decide -Idle 1199) 'RecentInput'
 Assert-Equal 'remote or local input exits' (Decide -Idle 0) 'RecentInput'
 Assert-Equal 'battery exits' (Decide -AC $false) 'Battery'
@@ -95,6 +121,20 @@ try{
  Assert-Equal 'logs have schema and operation trace' (@($records | Where-Object {$_.schemaVersion -ne 1 -or $_.operationId -ne '11111111-1111-1111-1111-111111111111'}).Count) 0
  Assert-Equal 'failure log is searchable' (@($records | Where-Object {$_.event -eq 'workstation.apply.failed'}).Count) 1
  Assert-Equal 'restore logs link entry operation' (@($records | Where-Object {$_.event -eq 'workstation.restore.success' -and $_.data.enteredBy}).Count -ge 2) $true
+ $json.workstation=@{enabled=$true;freqMax=1800;awayMinutes=5;schedule='EveryDay';startMinute=0;endMinute=1440;quietConfirmSeconds=30}
+ Write-AtomicJson (Join-Path $root 'settings.json') $json
+ $script:testIdle=300
+ Invoke-WorkstationEvaluation $root Idle $d
+ Age-QuietConfirmation
+ Invoke-WorkstationEvaluation $root Idle $d
+ Assert-Equal 'longer quiet confirmation does not use old ten second constant' (Read-AtomicJson (Join-Path $root 'workstation_state.json')).active $false
+ $fixture=Read-AtomicJson (Join-Path $root 'workstation_state.json');$fixture.quietSince=[DateTime]::UtcNow.AddSeconds(-31).ToString('o');Write-AtomicJson (Join-Path $root 'workstation_state.json') $fixture
+ Invoke-WorkstationEvaluation $root Idle $d
+ Assert-Equal 'worker accepts configured five minute wait' (Read-AtomicJson (Join-Path $root 'workstation_state.json')).active $true
+ $json.workstation.awayMinutes=30;Write-AtomicJson (Join-Path $root 'settings.json') $json
+ Invoke-WorkstationEvaluation $root Idle $d
+ Assert-Equal 'increasing wait restores active overlay immediately on reevaluation' (Read-AtomicJson (Join-Path $root 'workstation_state.json')).active $false
+ Assert-Equal 'schedule changes restore original frequency rather than default' $script:values['75b0ae3f-bce0-45a7-8c89-c9611c25e101'] 2200
 }finally{
  $full=[IO.Path]::GetFullPath($root);$prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\PowerProfileWorkstationTests-'
  if(-not $full.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe cleanup path'}

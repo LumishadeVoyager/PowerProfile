@@ -107,6 +107,14 @@ try {
     $before=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $settingsForm=Show-ModernSettings -ReturnForm
     $settingsForm.Show();[Windows.Forms.Application]::DoEvents()
+    $plan=$settingsForm.Tag.Plan
+    Assert-Equal 'schedule dropdown defaults to statutory working days' $plan.Schedule.SelectedItem.Value 'ChineseWorkdays'
+    Assert-Equal 'wait dropdown keeps twenty minute default' $plan.Away.SelectedItem.Value 20
+    Assert-Equal 'all plan selectors are true dropdowns' (@($plan.Schedule,$plan.Away,$plan.Start,$plan.End,$plan.Frequency,$plan.Quiet | Where-Object {$_.DropDownStyle -ne 'DropDownList'}).Count) 0
+    foreach($pair in @(@('Schedule','EveryDay'),@('Away',5),@('Start',0),@('End',1440),@('Quiet',30))){
+        $combo=$plan[$pair[0]]
+        for($i=0;$i -lt $combo.Items.Count;$i++){if([string]$combo.Items[$i].Value -eq [string]$pair[1]){$combo.SelectedIndex=$i;break}}
+    }
     $saveButton=@($settingsForm.Controls | Where-Object { $_ -is [Windows.Forms.Button] -and $_.Text -eq '保存' })[0]
     $saveButton.PerformClick()
     $after=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -114,6 +122,15 @@ try {
         Assert-Equal "modern UI save preserves CPU $mode" ($after.modes.$mode | ConvertTo-Json -Compress) ($before.modes.$mode | ConvertTo-Json -Compress)
     }
     Assert-Equal 'modern UI save changes only UI option' $after.ui.toastEnabled $true
+    Assert-Equal 'daily dropdown saved' $after.workstation.schedule 'EveryDay'
+    Assert-Equal 'wait dropdown saved' $after.workstation.awayMinutes 5
+    Assert-Equal 'all-day interval saved' ($after.workstation.startMinute -eq 0 -and $after.workstation.endMinute -eq 1440) $true
+    Assert-Equal 'quiet confirmation saved' $after.workstation.quietConfirmSeconds 30
+    Save-WorkstationOptions $false ([int]$after.workstation.freqMax) '2026-10-11T00:00:00'
+    $toggled=Read-AtomicJson $SettingsPath
+    Assert-Equal 'tray enable/pause preserves chosen wait' $toggled.workstation.awayMinutes 5
+    Assert-Equal 'tray enable/pause preserves chosen date policy' $toggled.workstation.schedule 'EveryDay'
+    Assert-Equal 'tray enable/pause preserves chosen interval' $toggled.workstation.endMinute 1440
     if($settingsForm.Icon){$settingsForm.Icon.Dispose()};$settingsForm.Dispose()
 } finally {
     $resolved=[IO.Path]::GetFullPath($testRoot)
