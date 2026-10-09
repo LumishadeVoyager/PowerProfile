@@ -13,6 +13,7 @@ using System.Windows.Forms;
 
 // Optional LAN miIO adapter. No cloud password, power-plan or hibernation calls.
 public sealed class ProfilePlugTransport {
+    public uint DeviceId {get;private set;}
     static int messageId=new Random().Next(1,9000);
     readonly string address; readonly byte[] token;
     public ProfilePlugTransport(string address, string secret) {
@@ -59,7 +60,8 @@ public sealed class ProfilePlugTransport {
             var result=json.Deserialize<Dictionary<string,object>>(Decode(response,token));
             if(!result.ContainsKey("id") || Convert.ToInt32(result["id"])!=id)throw new InvalidDataException("设备响应操作标识不匹配。");
             if(result.ContainsKey("error"))throw new InvalidDataException("设备拒绝请求，固件可能不支持本地 MIOT。");
-            if(!result.ContainsKey("result"))throw new InvalidDataException("设备响应缺少结果。");return result["result"];
+            if(!result.ContainsKey("result"))throw new InvalidDataException("设备响应缺少结果。");
+            DeviceId=((uint)header[8]<<24)|((uint)header[9]<<16)|((uint)header[10]<<8)|header[11];return result["result"];
         }
     }
     public void VerifyModel(){
@@ -84,7 +86,7 @@ public sealed class ProfilePlugTransport {
 public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} }
 public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} }
 public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
-public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} }
+public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
 public sealed class ProfileEnergySnapshot {
     public bool Configured; public bool Busy; public bool? On; public double? Watts; public DateTime ObservedAt;
     public string Status="未连接 · 请设置插座";public decimal? Price;public double? TodayKWh,WeekKWh,MonthKWh;
@@ -115,12 +117,22 @@ public sealed class ProfileEnergyService : IDisposable {
     public void Configure(string address,string secret,decimal? price){lock(gate){
         if(busy)throw new InvalidOperationException("正在连接或操作插座，请稍后保存。");
         address=address.Trim();string current="";
-        if(!String.IsNullOrWhiteSpace(address) && String.IsNullOrWhiteSpace(secret) && !String.IsNullOrEmpty(config.Secret))current=Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(config.Secret),entropy,DataProtectionScope.CurrentUser));
-        bool changedSecret=!String.IsNullOrWhiteSpace(secret);
+        if(!String.IsNullOrEmpty(config.Secret))current=Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(config.Secret),entropy,DataProtectionScope.CurrentUser));
+        bool changedSecret=!String.IsNullOrWhiteSpace(secret) && secret!=current;
         if(String.IsNullOrWhiteSpace(secret))secret=current;Validate(address,secret,price);
-        var next=new ProfileEnergyConfig{Address=address,Price=price,Secret=String.IsNullOrWhiteSpace(address)?null:Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(secret),entropy,DataProtectionScope.CurrentUser))};
+        uint deviceId=config.DeviceId;
+        bool sameDevice=false;
+        if(!String.IsNullOrWhiteSpace(address) && (config.Address!=address || changedSecret) && deviceId!=0){
+            var target=new ProfilePlugTransport(address,secret);target.VerifyModel();
+            if(target.DeviceId!=deviceId)throw new InvalidDataException("新地址属于其他插座；请先核实设备，现有配置与历史记录已保留。");
+            sameDevice=true;
+        }
+        var next=new ProfileEnergyConfig{Address=address,Price=price,DeviceId=String.IsNullOrWhiteSpace(address)?0:deviceId,Secret=String.IsNullOrWhiteSpace(address)?null:Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(secret),entropy,DataProtectionScope.CurrentUser))};
         ProfileEnergyStore.Write(Path.Combine(root,"energy.settings.json"),Serializer().Serialize(next));
-        if(config.Address!=address || changedSecret){history=new ProfileEnergyHistory{Device=address,Points=new List<ProfileEnergyPoint>(),Days=new Dictionary<string,ProfileEnergyDay>()};ProfileEnergyStore.Write(Path.Combine(root,"energy.history.json"),Serializer().Serialize(history));}
+        if(config.Address!=address || changedSecret){
+            if(sameDevice){history.Device=address;if(history.Points.Count>0)history.Points[history.Points.Count-1].InvalidAfter=true;Event("energy.address.updated","新地址经授权与设备 ID 校验通过；已保留该插座的历史用电","INFO");}
+            else {history=new ProfileEnergyHistory{Device=address,Points=new List<ProfileEnergyPoint>(),Days=new Dictionary<string,ProfileEnergyDay>()};next.DeviceId=0;}
+            ProfileEnergyStore.Write(Path.Combine(root,"energy.history.json"),Serializer().Serialize(history));}
         config=next;snapshot=new ProfileEnergySnapshot{Configured=!String.IsNullOrWhiteSpace(address),Price=price,Status=String.IsNullOrWhiteSpace(address)?"未连接 · 请设置插座":"等待连接"};
         timer.Change(snapshot.Configured && autoPoll?0:Timeout.Infinite,snapshot.Configured && autoPoll?60000:Timeout.Infinite);Event("energy.config.saved","已保存插座配置与固定电价；凭据使用 Windows 当前用户加密","INFO");}}
     public ProfileEnergySnapshot GetSnapshot(){lock(gate){
@@ -148,6 +160,8 @@ public sealed class ProfileEnergyService : IDisposable {
         ProfileEnergyConfig c;lock(gate)c=config;
         string secret=Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(c.Secret),entropy,DataProtectionScope.CurrentUser));
         var transport=new ProfilePlugTransport(c.Address,secret);transport.VerifyModel();
+        if(c.DeviceId!=0 && transport.DeviceId!=c.DeviceId)throw new InvalidDataException("该 IP 已分配给其他插座，请更新地址；历史记录已保留。");
+        if(c.DeviceId==0){lock(gate){c.DeviceId=transport.DeviceId;ProfileEnergyStore.Write(Path.Combine(root,"energy.settings.json"),Serializer().Serialize(c));}}
         if(command.HasValue){transport.Switch(command.Value);Event("energy.switch.accepted","插座确认手动开关请求；正在复核实际状态","INFO",operation);}
         object result=transport.Read();object state=ProfilePlugTransport.ReadValue(result,2,1),power=ProfilePlugTransport.ReadValue(result,11,2);
         if(!(state is bool))throw new InvalidDataException("插座未提供有效开关状态。");
