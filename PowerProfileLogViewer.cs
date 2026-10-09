@@ -156,7 +156,7 @@ public sealed class ProfileLogViewer : Form {
             object dataObject;var data=d.TryGetValue("data",out dataObject)?dataObject as Dictionary<string,object>:null;
             string ev=ProfileLogRecord.Text(d,"event"),operation=ProfileLogRecord.Text(d,"operationId");
             if(ev=="worker.request"||ev=="workstation.restore.request"){string child=ProfileLogRecord.Text(data,"operationId");if(child!="")operation=child;}
-            if(ev=="telemetry.failed"){string child=ProfileLogRecord.Text(data,"childOperationId");if(child!="")operation=child;}
+            if(ev=="telemetry.failed"||ev=="telemetry.timeout"){string child=ProfileLogRecord.Text(data,"childOperationId");if(child!="")operation=child;}
             string related=ProfileLogRecord.Text(data,"enteredBy");
             if(related==""&&ev=="workstation.decision"){var parent=ProfileLogRecord.Text(data,"operationId");if(parent!=operation)related=parent;}
             result.Add(new ProfileLogRecord{Record=d,Raw=entry[0],Source=entry[1],Timestamp=ProfileLogRecord.Text(d,"timestamp"),Time=ProfileLogRecord.Text(d,"localTime"),Level=ProfileLogRecord.Text(d,"level"),Event=ev,Message=ProfileLogRecord.Text(d,"message"),Operation=operation,Related=related});

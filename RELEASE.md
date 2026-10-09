@@ -46,6 +46,8 @@
 
 计数器依据：[Microsoft Processor Information 示例](https://learn.microsoft.com/en-us/windows/win32/perfctrs/using-the-perflib-functions-to-consume-counter-data)。
 
+CPU/内存先独立发布，再查询频率和 GPU；各阶段带采样操作编号。看门狗按该进程最近一次发布进度计时，30 秒无进展或单次总计达到 45 秒才终止并重试，避免正常冷启动被过早终止。被看门狗终止只记录一次超时，附耗时、最后阶段和关联采样编号，不再重复记录为采样自身异常。
+
 ## 可溯源日志
 
 右键“打开日志”、双击图标或状态窗口“查看日志”打开内置原生日志查看器，不再默认启动记事本。支持日期、等级、行为分类和搜索；默认关键事件减少重复判断噪声，可切换全部事件。选中事件展示中文详情、执行证据、错误堆栈及源文件行号，“查看整次操作”关联进入与恢复且不把整个托盘会话混成一次操作。后台读取最近 2000 条，兼容轮转分片、不完整尾行，每 5 秒检查文件变化，关闭后停止刷新。数据源依旧保存到 logs/PowerProfile-YYYY-MM-DD.log 与同名 .jsonl；原 profile.log 和 Analyze-Usage.ps1 保持兼容，旧版沿用原日志入口。

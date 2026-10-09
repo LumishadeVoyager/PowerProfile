@@ -25,6 +25,7 @@ try {
     function Get-UserActivityIdleSeconds{return 90}
     function Format-Freq($MHz){return "$MHz MHz"}
     . (Join-Path $project 'PowerProfileModernUI.ps1')
+    $realSampler=${function:Invoke-TelemetrySample}
     # Stub only data sampling; all native controls and window lifetime are real.
     function Invoke-TelemetrySample{}
     foreach($mode in @('Idle','Balanced','Game')) {
@@ -68,6 +69,24 @@ try {
     Write-AtomicJson (Join-Path $testRoot 'system_status.json') @{observedAt=$stamp;cpuFrequencyMHz=2350;fieldStates=@{cpuFrequencyMHz=@{state='stale';observedAt=$expired}}}
     Update-ModernDashboard
     Assert-Equal 'expired frequency is not shown as current' $Script:Dashboard.Tag.Fields.frequency.Text '等待采样'
+    $logger=${function:Write-ProfileEvent}
+    $Script:watchEvents=@();$Script:fixtureKills=0
+    function Write-ProfileEvent {param($Event,$Message,$Level,$Data) $Script:watchEvents+=@($Event)}
+    function Start-HiddenPowerShell {param($Arguments) return $null}
+    $Script:TelemetryOperationId='fixture-progress'
+    $Script:TelemetryStarted=[DateTime]::UtcNow.AddSeconds(-35)
+    $Script:TelemetryProgressAt=$Script:TelemetryStarted
+    $Script:TelemetryProcess=[PSCustomObject]@{HasExited=$false;ExitCode=-1}
+    $Script:TelemetryProcess | Add-Member ScriptMethod Kill {$this.HasExited=$true;$Script:fixtureKills++}
+    $Script:TelemetryProcess | Add-Member ScriptMethod Dispose {}
+    Write-AtomicJson (Join-Path $testRoot 'system_status.json') @{observedAt=[DateTime]::UtcNow.ToString('o');operationId='fixture-progress';stage='gpu-loading'}
+    & $realSampler
+    Assert-Equal 'recent partial progress keeps active sampler alive' $Script:fixtureKills 0
+    $Script:TelemetryStarted=[DateTime]::UtcNow.AddSeconds(-50)
+    & $realSampler
+    Assert-Equal 'hard deadline terminates only owned sampler' $Script:fixtureKills 1
+    Assert-Equal 'watchdog timeout records one warning rather than duplicate failure' ($Script:watchEvents -join ',') 'telemetry.timeout'
+    ${function:Write-ProfileEvent}=$logger
     function Get-CurrentMode{return 'Idle'}
     $ScriptDir=$project
     $timer=$Script:Dashboard.Tag.Timer

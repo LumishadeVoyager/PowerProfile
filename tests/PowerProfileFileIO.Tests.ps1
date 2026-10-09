@@ -78,7 +78,7 @@ public static class SnapshotTestLock {
     } finally { $locked.Dispose();if($sampler){if(-not $sampler.HasExited){$sampler.Kill()};$sampler.Dispose()} }
     $records=@(Get-Content (Join-Path $fixture ('logs\PowerProfile-'+(Get-Date).ToString('yyyy-MM-dd')+'.jsonl')) | ForEach-Object {$_ | ConvertFrom-Json})
     $errorEvent=@($records | Where-Object {$_.event -eq 'telemetry.exception'})[0]
-    Assert-True 'sampler failure records exact stage and child correlation' ($errorEvent.data.stage -eq 'publish-partial' -and $errorEvent.operationId -eq 'fixture-sampler-error')
+    Assert-True 'sampler failure records exact stage and child correlation' ($errorEvent.data.stage -eq 'publish-native' -and $errorEvent.operationId -eq 'fixture-sampler-error')
     Assert-True 'sampler failure records file path and stack' ($errorEvent.data.path -eq $status -and $errorEvent.data.stack -match 'Write-AtomicJson' -and $errorEvent.message -match 'Win32')
 } finally {
     foreach($job in $jobs){Stop-Job $job;Remove-Job $job}

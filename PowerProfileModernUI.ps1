@@ -58,14 +58,26 @@ function Initialize-ModernForm {
     $Form.Add_Shown({param($sender,$eventArgs) [ProfileVisual]::ActivateDashboard($sender.Handle)})
 }
 function Invoke-TelemetrySample {
+    $timedOut=$false
     if($Script:TelemetryProcess -and -not $Script:TelemetryProcess.HasExited){
-        if(([DateTime]::UtcNow-$Script:TelemetryStarted).TotalSeconds -lt 15){return}
+        # A partial snapshot is progress, even while WMI/PDH is still completing.
+        try {
+            $progress=Read-AtomicJson (Join-Path $ScriptDir 'system_status.json')
+            if($progress.operationId -eq $Script:TelemetryOperationId){
+                $stamp=([DateTime]$progress.observedAt).ToUniversalTime()
+                if($stamp -gt $Script:TelemetryProgressAt){$Script:TelemetryProgressAt=$stamp}
+            }
+        } catch {}
+        $elapsed=([DateTime]::UtcNow-$Script:TelemetryStarted).TotalSeconds
+        if($elapsed -lt 45 -and ([DateTime]::UtcNow-$Script:TelemetryProgressAt).TotalSeconds -lt 30){return}
         $Script:TelemetryProcess.Kill()
-        Write-ProfileEvent 'telemetry.timeout' '只读采样超过 15 秒，已终止并重新采样' 'WARN'
+        $timedOut=$true
+        Write-ProfileEvent 'telemetry.timeout' '只读采样长时间无进展，已终止并重新采样' 'WARN' @{childOperationId=$Script:TelemetryOperationId;elapsedSeconds=[Math]::Round($elapsed,1);lastStage=$progress.stage}
     }
-    if($Script:TelemetryProcess -and $Script:TelemetryProcess.HasExited -and $Script:TelemetryProcess.ExitCode -ne 0){Write-ProfileEvent 'telemetry.failed' '只读采样进程失败，将重试；请按关联操作查阅具体异常' 'WARN' @{exitCode=$Script:TelemetryProcess.ExitCode;childOperationId=$Script:TelemetryOperationId}}
+    if(-not $timedOut -and $Script:TelemetryProcess -and $Script:TelemetryProcess.HasExited -and $Script:TelemetryProcess.ExitCode -ne 0){Write-ProfileEvent 'telemetry.failed' '只读采样进程失败，将重试；请按关联操作查阅具体异常' 'WARN' @{exitCode=$Script:TelemetryProcess.ExitCode;childOperationId=$Script:TelemetryOperationId}}
     if($Script:TelemetryProcess){$Script:TelemetryProcess.Dispose()}
     $Script:TelemetryStarted=[DateTime]::UtcNow
+    $Script:TelemetryProgressAt=$Script:TelemetryStarted
     $Script:TelemetryOperationId=[Guid]::NewGuid().ToString()
     $Script:TelemetryProcess=Start-HiddenPowerShell @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $ScriptDir 'Read-SystemStatus.ps1')),'-OperationId',$Script:TelemetryOperationId)
 }
