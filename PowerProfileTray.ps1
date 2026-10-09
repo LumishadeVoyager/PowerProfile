@@ -700,11 +700,12 @@ function Invoke-Worker {
 }
 
 function Invoke-WorkstationWorker {
-    param([switch]$Restore,[string]$RestoreReason='用户关闭、暂停或保存省电配置')
+    param([switch]$Restore,[string]$RestoreReason='用户关闭、暂停或保存省电配置',[string]$WorkerPath=$WorkerScript)
+    if([string]::IsNullOrWhiteSpace($WorkerPath)){$WorkerPath=Join-Path $PSScriptRoot 'PowerProfile.ps1'}
     if($Script:WorkstationProcess -and -not $Script:WorkstationProcess.HasExited){return}
     if(-not $Restore -and $Script:WorkerProcess -and -not $Script:WorkerProcess.HasExited){return}
     $operation=[Guid]::NewGuid().ToString()
-    $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $WorkerScript),'-Mode','Auto','-OperationId',$operation)
+    $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f $WorkerPath),'-Mode','Auto','-OperationId',$operation)
     $arguments+=if($Restore){'-RestoreWorkstation'}else{'-WorkstationOnly'}
     if($Restore){$arguments+=@('-Reason',('"{0}"' -f ($RestoreReason -replace '["\r\n]',' ')))}
     $Script:WorkstationProcess=Start-HiddenPowerShell $arguments

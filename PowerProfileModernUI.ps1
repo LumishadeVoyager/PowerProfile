@@ -16,8 +16,9 @@ function Get-ModernUIOptions {
     return $o
 }
 function Save-WorkstationOptions {
-    param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='',[int]$AwayMinutes,[string]$Schedule,[int]$StartMinute,[int]$EndMinute,[int]$QuietConfirmSeconds,$ToastEnabled=$null,$AutoLoadOptions=$null)
-    $json=Read-AtomicJson $SettingsPath
+    param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='',[int]$AwayMinutes,[string]$Schedule,[int]$StartMinute,[int]$EndMinute,[int]$QuietConfirmSeconds,$ToastEnabled=$null,$AutoLoadOptions=$null,[string]$SettingsFile=$SettingsPath)
+    if([string]::IsNullOrWhiteSpace($SettingsFile)){$SettingsFile=Join-Path $PSScriptRoot 'settings.json'}
+    $json=Read-AtomicJson $SettingsFile
     $options=Get-WorkstationOptions $json
     foreach($key in @('AwayMinutes','Schedule','StartMinute','EndMinute','QuietConfirmSeconds')){if($PSBoundParameters.ContainsKey($key)){$options[$key]=$PSBoundParameters[$key]}}
     $checked=Get-WorkstationOptions ([PSCustomObject]@{workstation=[PSCustomObject]$options})
@@ -38,8 +39,8 @@ function Save-WorkstationOptions {
         $ui | Add-Member -NotePropertyName toastEnabled -NotePropertyValue $ToastEnabled -Force
         $json | Add-Member -NotePropertyName ui -NotePropertyValue $ui -Force
     }
-    Write-AtomicJson $SettingsPath $json -Pretty
-    $Script:ProfileSettingsHash=Get-ProfileFileHash $SettingsPath
+    Write-AtomicJson $SettingsFile $json -Pretty
+    $Script:ProfileSettingsHash=Get-ProfileFileHash $SettingsFile
     Write-ProfileEvent 'settings.workstation.saved' '保存附加省电配置' -Data @{enabled=$Enabled;freqMax=$Frequency;awayMinutes=$checked.awayMinutes;schedule=$checked.schedule;startMinute=$checked.startMinute;endMinute=$checked.endMinute;quietConfirmSeconds=$checked.quietConfirmSeconds;pausedUntil=$PausedUntil}
     if($AutoLoadOptions){Write-ProfileEvent 'settings.auto-load.saved' '保存智能负载切换参数' -Data $checkedLoad}
 }
@@ -289,6 +290,26 @@ function Show-ModernDashboard {
 # A configured meter continues accumulating while the dashboard is closed.
 try {Initialize-EnergyService} catch {Write-ProfileEvent 'energy.start.failed' '用电模块无法启动；原电源控制继续运行' 'ERROR' @{reason=$_.Exception.GetBaseException().Message}}
 
+function Update-WorkstationTimeControls {
+    param($Form)
+    if(-not $Form -or -not $Form.Tag){return}
+    $plan=$Form.Tag.Plan
+    $plan.Start.Enabled=-not $plan.AllDay.Checked;$plan.End.Enabled=-not $plan.AllDay.Checked
+    $plan.TimeHint.Text=if($plan.AllDay.Checked){'全天 00:00–24:00；仍需满足离开和低负载条件'}else{'北京时间；结束 00:00 表示当天 24:00'}
+}
+function Save-ModernSettingsForm {
+    param($Form)
+    $plan=$Form.Tag.Plan
+    $loadOptions=@{};foreach($key in $Form.Tag.AutoLoad.Keys){$loadOptions[$key]=[int]$Form.Tag.AutoLoad[$key].SelectedItem.Value}
+    $startMinute=if($plan.AllDay.Checked){0}else{[int]$plan.Start.Value.TimeOfDay.TotalMinutes}
+    $endMinute=if($plan.AllDay.Checked){1440}else{[int]$plan.End.Value.TimeOfDay.TotalMinutes}
+    if($endMinute -eq 0){$endMinute=1440}
+    if($startMinute -ge $endMinute){throw '结束时间需晚于开始时间；全天生效请勾选“全天生效”。'}
+    Save-WorkstationOptions $plan.Enabled.Checked ([int]$plan.Frequency.SelectedItem.Value) '' -AwayMinutes ([int]$plan.Away.SelectedItem.Value) -Schedule ([string]$plan.Schedule.SelectedItem.Value) -StartMinute $startMinute -EndMinute $endMinute -QuietConfirmSeconds ([int]$plan.Quiet.SelectedItem.Value) -ToastEnabled $Form.Tag.Toast.Checked -AutoLoadOptions $loadOptions -SettingsFile $Form.Tag.SettingsFile
+    try{if(Get-Command Invoke-WorkstationWorker -ErrorAction SilentlyContinue){Invoke-WorkstationWorker -Restore -WorkerPath (Join-Path $Form.Tag.Root 'PowerProfile.ps1')}}
+    catch{Write-ProfileEvent 'settings.restore.retry' '设置已保存，托盘下一轮检测将重试恢复检查' 'WARN' @{error=$_.Exception.Message}}
+    $Form.Tag.LastSaveError='';$Form.Close()
+}
 function Show-ModernSettings {
     param([switch]$ReturnForm)
     $form=New-Object Windows.Forms.Form
@@ -317,22 +338,24 @@ function Show-ModernSettings {
     $awayChoices=@();foreach($minutes in @(1,5,10,15,20,30,45,60,90,120)){$awayChoices+=,@($minutes,"$minutes 分钟")}
     $away=New-WorkstationCombo $plan 230 99 188 $awayChoices $w.awayMinutes
     $plan.Controls.Add((New-ModernLabel '生效时段' 18 145 130))
-    $startChoices=@();$endChoices=@()
-    for($minute=0;$minute -le 1440;$minute+=30){$entry=@($minute,(Format-WorkstationTime $minute));$endChoices+=,@($entry);if($minute -lt 1440){$startChoices+=,@($entry)}}
-    $start=New-WorkstationCombo $plan 165 143 113 $startChoices $w.startMinute
-    $plan.Controls.Add((New-ModernLabel '至' 282 145 26))
-    $end=New-WorkstationCombo $plan 309 143 109 $endChoices $w.endMinute
-    $Script:DashboardTip.SetToolTip($end,'北京时间，同一天的起止时段；选择 00:00–24:00 可全天生效。')
-    $plan.Controls.Add((New-ModernLabel 'CPU 上限' 18 189 130))
+    $allDay=New-Object Windows.Forms.CheckBox;$allDay.Text='全天生效';$allDay.Checked=($w.startMinute -eq 0 -and $w.endMinute -eq 1440);$allDay.SetBounds(165,141,253,26);$plan.Controls.Add($allDay)
+    $plan.Controls.Add((New-ModernLabel '自定义时间' 18 179 130))
+    $start=New-Object Windows.Forms.DateTimePicker;$start.Format='Custom';$start.CustomFormat='HH:mm';$start.ShowUpDown=$true;$start.Value=[DateTime]::Today.AddMinutes($w.startMinute);$start.SetBounds(165,177,113,27);$plan.Controls.Add($start)
+    $plan.Controls.Add((New-ModernLabel '至' 282 179 26))
+    $end=New-Object Windows.Forms.DateTimePicker;$end.Format='Custom';$end.CustomFormat='HH:mm';$end.ShowUpDown=$true;$end.Value=[DateTime]::Today.AddMinutes($w.endMinute);$end.SetBounds(309,177,109,27);$plan.Controls.Add($end)
+    $Script:DashboardTip.SetToolTip($start,'点击小时或分钟直接输入，也可用上下箭头调整。')
+    $Script:DashboardTip.SetToolTip($end,'直接输入小时和分钟；00:00 表示当天结束（24:00）。暂不支持跨午夜时段。')
+    $plan.Controls.Add((New-ModernLabel 'CPU 上限' 18 221 130))
     $json=Read-AtomicJson $SettingsPath;$frequencyChoices=@()
     foreach($mhz in @(500,800,1000,1200,1400,1500,1600,1700,1800,1900,2000,2100,2200,2400,2600,2800,3000)){
         if($json.processorBaseMHz -gt 0 -and $mhz -lt $json.modes.Idle.freqMax -and [Math]::Floor(100*$mhz/$json.processorBaseMHz) -ge $json.modes.Idle.min+5){$frequencyChoices+=,@($mhz,"$mhz MHz")}
     }
-    $frequency=New-WorkstationCombo $plan 230 187 188 $frequencyChoices $w.freqMax
-    $plan.Controls.Add((New-ModernLabel '低负载持续确认' 18 233 160))
-    $quiet=New-WorkstationCombo $plan 230 231 188 @(@(10,'至少 10 秒'),@(20,'至少 20 秒'),@(30,'至少 30 秒'),@(60,'至少 60 秒')) $w.quietConfirmSeconds
-    $y=279
-    foreach($text in @('时段采用北京时间；结束时撤销附加参数','游戏、高负载和手动档位始终优先','仅调整交流电上限；保留 C-state 等稳定参数')){$plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=31}
+    $frequency=New-WorkstationCombo $plan 230 219 188 $frequencyChoices $w.freqMax
+    $plan.Controls.Add((New-ModernLabel '低负载持续确认' 18 263 160))
+    $quiet=New-WorkstationCombo $plan 230 261 188 @(@(10,'至少 10 秒'),@(20,'至少 20 秒'),@(30,'至少 30 秒'),@(60,'至少 60 秒')) $w.quietConfirmSeconds
+    $timeHint=New-ModernLabel '' 18 302 410;$timeHint.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$plan.Controls.Add($timeHint)
+    $y=330
+    foreach($text in @('游戏、高负载和手动档位始终优先','保留 C-state 等稳定参数')){$plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=26}
     $policy=Read-AutoLoadOptions $json.autoLoad;$loadControls=@{};$y=22
     foreach($entry in @(@('均衡 CPU 阈值','balancedCpu',@(20,25,30,40)),@('高性能 CPU 阈值','highCpu',@(60,70,80,90)),@('非游戏升至高性能确认','highConfirmCount',@(1,2,3)),@('降档连续确认','downConfirmCount',@(2,3,4,6)))){
         $smart.Controls.Add((New-ModernLabel $entry[0] 18 $y 225));$choices=@()
@@ -341,7 +364,10 @@ function Show-ModernSettings {
     }
     $y+=4
     foreach($text in @('确认游戏：立即进入游戏档，不等待负载','进程 ≥80% 一核算力或工作 GPU ≥30%：均衡','工作 GPU ≥75%：确认后进入高性能','降档使用更低阈值，减少频繁来回切换','无键鼠输入不影响编译、导出等持续任务','沿用自动检测间隔；手动静音/均衡优先')){$smart.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=26}
-    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;Start=$start;End=$end;Frequency=$frequency;Quiet=$quiet};Toast=$toast;AutoLoad=$loadControls}
+    $saveStatus=New-ModernLabel '' 12 440 345;$saveStatus.Height=32;$saveStatus.ForeColor=[Drawing.Color]::FromArgb(174,63,66);$saveStatus.AutoEllipsis=$true;$form.Controls.Add($saveStatus)
+    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;AllDay=$allDay;Start=$start;End=$end;TimeHint=$timeHint;Frequency=$frequency;Quiet=$quiet};Toast=$toast;AutoLoad=$loadControls;SettingsFile=[IO.Path]::GetFullPath($SettingsPath);Root=[IO.Path]::GetFullPath($ScriptDir);SaveStatus=$saveStatus;LastSaveError=''}
+    $allDay.Add_CheckedChanged({param($sender,$eventArgs) Update-WorkstationTimeControls $sender.FindForm()})
+    Update-WorkstationTimeControls $form
     $y=18
     foreach($text in @('游戏主体进程存在时，禁止附加省电','暂不添加剪辑、建模软件进程名单','CPU 总占用 ≥25% 或单进程 ≥10% 阻止','单进程占用 ≥70% 的一核算力也阻止','任一 GPU 引擎 ≥15% 时阻止','检查失败不进入；低负载需连续两次确认')) {
         $protect.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38
@@ -349,13 +375,10 @@ function Show-ModernSettings {
     $save=New-Object Windows.Forms.Button;$save.Text='保存';$save.SetBounds(368,440,100,30);$form.Controls.Add($save)
     $save.Add_Click({
         param($sender,$eventArgs)
-        $settingsForm=$sender.FindForm();$plan=$settingsForm.Tag.Plan
+        $settingsForm=$sender.FindForm()
         try {
-            $loadOptions=@{};foreach($key in $settingsForm.Tag.AutoLoad.Keys){$loadOptions[$key]=[int]$settingsForm.Tag.AutoLoad[$key].SelectedItem.Value}
-            Save-WorkstationOptions $plan.Enabled.Checked ([int]$plan.Frequency.SelectedItem.Value) '' -AwayMinutes ([int]$plan.Away.SelectedItem.Value) -Schedule ([string]$plan.Schedule.SelectedItem.Value) -StartMinute ([int]$plan.Start.SelectedItem.Value) -EndMinute ([int]$plan.End.SelectedItem.Value) -QuietConfirmSeconds ([int]$plan.Quiet.SelectedItem.Value) -ToastEnabled $settingsForm.Tag.Toast.Checked -AutoLoadOptions $loadOptions
-            if(Get-Command Invoke-WorkstationWorker -ErrorAction SilentlyContinue){Invoke-WorkstationWorker -Restore}
-            $settingsForm.Close()
-        } catch {Write-ProfileEvent 'settings.save.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage};[void][Windows.Forms.MessageBox]::Show("保存失败: $_")}
+            Save-ModernSettingsForm $settingsForm
+        } catch {$settingsForm.Tag.LastSaveError=$_.Exception.Message;$settingsForm.Tag.SaveStatus.Text="未保存：$($_.Exception.Message)";$Script:DashboardTip.SetToolTip($settingsForm.Tag.SaveStatus,$_.Exception.Message);Write-ProfileEvent 'settings.save.failed' $_.Exception.Message 'ERROR' @{settingsPath=$settingsForm.Tag.SettingsFile;stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage}}
     })
     if($ReturnForm){return $form}
     [void]$form.ShowDialog();if($form.Icon){$form.Icon.Dispose()};$form.Dispose()

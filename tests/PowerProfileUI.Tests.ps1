@@ -117,7 +117,7 @@ try {
     Assert-Equal 'UI loading leaves settings unchanged' (Get-FileHash $SettingsPath).Hash (Get-FileHash (Join-Path $project 'settings.example.json')).Hash
     . (Join-Path $project 'PowerProfileDetection.ps1')
     $before=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    function Invoke-WorkstationWorker {param([switch]$Restore) $Script:fixtureRestorePath=Join-Path $ScriptDir 'PowerProfile.ps1'}
+    function Invoke-WorkstationWorker {param([switch]$Restore,[string]$WorkerPath) $Script:fixtureRestorePath=$WorkerPath}
     $Script:DashboardActions.Settings.Add_Click({$Script:routedSettingsForm=Show-ModernSettings -ReturnForm})
     Invoke-DashboardAction Settings
     $settingsForm=$Script:routedSettingsForm
@@ -129,13 +129,19 @@ try {
     $settingsForm.Tag.AutoLoad.highConfirmCount.SelectedIndex=2
     Assert-Equal 'schedule dropdown defaults to statutory working days' $plan.Schedule.SelectedItem.Value 'ChineseWorkdays'
     Assert-Equal 'wait dropdown keeps twenty minute default' $plan.Away.SelectedItem.Value 20
-    Assert-Equal 'all plan selectors are true dropdowns' (@($plan.Schedule,$plan.Away,$plan.Start,$plan.End,$plan.Frequency,$plan.Quiet | Where-Object {$_.DropDownStyle -ne 'DropDownList'}).Count) 0
-    foreach($pair in @(@('Schedule','EveryDay'),@('Away',5),@('Start',0),@('End',1440),@('Quiet',30))){
+    Assert-Equal 'categorical selectors remain compact dropdowns' (@($plan.Schedule,$plan.Away,$plan.Frequency,$plan.Quiet | Where-Object {$_.DropDownStyle -ne 'DropDownList'}).Count) 0
+    Assert-Equal 'time uses editable native clock controls' ($plan.Start -is [Windows.Forms.DateTimePicker] -and $plan.End -is [Windows.Forms.DateTimePicker] -and $plan.Start.ShowUpDown -and $plan.End.ShowUpDown) $true
+    foreach($pair in @(@('Schedule','EveryDay'),@('Away',5),@('Quiet',30))){
         $combo=$plan[$pair[0]]
         for($i=0;$i -lt $combo.Items.Count;$i++){if([string]$combo.Items[$i].Value -eq [string]$pair[1]){$combo.SelectedIndex=$i;break}}
     }
+    $plan.AllDay.Checked=$true
+    Assert-Equal 'all day disables custom clock fields' (-not $plan.Start.Enabled -and -not $plan.End.Enabled) $true
     $saveButton=@($settingsForm.Controls | Where-Object { $_ -is [Windows.Forms.Button] -and $_.Text -eq '保存' })[0]
+    $fixtureSettingsPath=$SettingsPath;$SettingsPath=$null
     $saveButton.PerformClick()
+    $SettingsPath=$fixtureSettingsPath
+    Assert-Equal 'save succeeds without ambient settings path' $settingsForm.Tag.LastSaveError ''
     Assert-Equal 'overview settings save restores overlay with valid worker path' $Script:fixtureRestorePath (Join-Path $project 'PowerProfile.ps1')
     Assert-Equal 'successful save closes settings window' $settingsForm.Visible $false
     $after=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -155,12 +161,40 @@ try {
     Assert-Equal 'tray enable/pause preserves chosen date policy' $toggled.workstation.schedule 'EveryDay'
     Assert-Equal 'tray enable/pause preserves chosen interval' $toggled.workstation.endMinute 1440
     if($settingsForm.Icon){$settingsForm.Icon.Dispose()};$settingsForm.Dispose()
-    $directForm=Show-ModernSettings -ReturnForm;$directForm.Show();[Windows.Forms.Application]::DoEvents()
+    $directForm=Show-ModernSettings -ReturnForm
     $Script:fixtureRestorePath=$null
-    @($directForm.Controls | Where-Object {$_ -is [Windows.Forms.Button] -and $_.Text -eq '保存'})[0].PerformClick()
+    $modalTimer=New-Object Windows.Forms.Timer;$modalTimer.Interval=50
+    $modalTimer | Add-Member NoteProperty SettingsForm $directForm
+    $modalTimer.Add_Tick({param($sender,$eventArgs) $sender.Stop();$dialog=$sender.SettingsForm;@($dialog.Controls | Where-Object {$_ -is [Windows.Forms.Button] -and $_.Text -eq '保存'})[0].PerformClick();if($dialog.Tag.LastSaveError){$dialog.Close()}})
+    $SettingsPath=$null;$fixtureScriptDir=$ScriptDir;$ScriptDir=$null
+    $modalTimer.Start();[void]$directForm.ShowDialog();$modalTimer.Dispose()
+    $SettingsPath=$fixtureSettingsPath;$ScriptDir=$fixtureScriptDir
+    Assert-Equal 'real modal event-loop save has no path error' $directForm.Tag.LastSaveError ''
     Assert-Equal 'direct tray settings save retains installation path' $Script:fixtureRestorePath (Join-Path $project 'PowerProfile.ps1')
     Assert-Equal 'direct settings save closes window' $directForm.Visible $false
     if($directForm.Icon){$directForm.Icon.Dispose()};$directForm.Dispose()
+    $customForm=Show-ModernSettings -ReturnForm;$customForm.Show();[Windows.Forms.Application]::DoEvents()
+    $clock=$customForm.Tag.Plan;$clock.AllDay.Checked=$false
+    $clock.Start.Value=[DateTime]::Today.AddHours(22);$clock.End.Value=[DateTime]::Today.AddHours(6)
+    $beforeInvalid=(Get-FileHash $SettingsPath).Hash
+    $clockSave=@($customForm.Controls | Where-Object {$_ -is [Windows.Forms.Button] -and $_.Text -eq '保存'})[0];$clockSave.PerformClick()
+    Assert-Equal 'invalid clock range gives readable inline feedback' ($customForm.Tag.LastSaveError -like '结束时间*' -and $customForm.Visible) $true
+    Assert-Equal 'invalid clock range never partially saves' (Get-FileHash $SettingsPath).Hash $beforeInvalid
+    $clock.Start.Value=[DateTime]::Today.AddHours(9).AddMinutes(17);$clock.End.Value=[DateTime]::Today.AddHours(18).AddMinutes(43)
+    $clockSave.PerformClick();$custom=Read-AtomicJson $SettingsPath
+    Assert-Equal 'custom start supports minute precision' $custom.workstation.startMinute 557
+    Assert-Equal 'custom end supports minute precision' $custom.workstation.endMinute 1123
+    $reopened=Show-ModernSettings -ReturnForm
+    Assert-Equal 'custom clock survives reopening' ($reopened.Tag.Plan.Start.Value.ToString('HH:mm')+'–'+$reopened.Tag.Plan.End.Value.ToString('HH:mm')) '09:17–18:43'
+    Assert-Equal 'custom period is not mislabeled as all day' $reopened.Tag.Plan.AllDay.Checked $false
+    $reopened.Dispose();$customForm.Dispose()
+    $realistic=Read-AtomicJson $SettingsPath;$realistic.modes.Idle.freqMax=2200;$realistic.modes.Idle.min=50;$realistic.processorBaseMHz=2600;$realistic.workstation.enabled=$true
+    Write-AtomicJson $SettingsPath $realistic
+    $enabledForm=Show-ModernSettings -ReturnForm;$enabledForm.Show();[Windows.Forms.Application]::DoEvents()
+    @($enabledForm.Controls | Where-Object {$_ -is [Windows.Forms.Button] -and $_.Text -eq '保存'})[0].PerformClick()
+    Assert-Equal 'enabled plan saves with calibrated real-world CPU parameters' $enabledForm.Tag.LastSaveError ''
+    Assert-Equal 'enabled plan remains enabled after save' (Read-AtomicJson $SettingsPath).workstation.enabled $true
+    $enabledForm.Dispose()
 } finally {
     $resolved=[IO.Path]::GetFullPath($testRoot)
     $prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\PowerProfileUITests-'
