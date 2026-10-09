@@ -16,11 +16,16 @@ function Get-ModernUIOptions {
     return $o
 }
 function Save-WorkstationOptions {
-    param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='',[int]$AwayMinutes,[string]$Schedule,[int]$StartMinute,[int]$EndMinute,[int]$QuietConfirmSeconds,$ToastEnabled=$null)
+    param([bool]$Enabled,[int]$Frequency,[string]$PausedUntil='',[int]$AwayMinutes,[string]$Schedule,[int]$StartMinute,[int]$EndMinute,[int]$QuietConfirmSeconds,$ToastEnabled=$null,$AutoLoadOptions=$null)
     $json=Read-AtomicJson $SettingsPath
     $options=Get-WorkstationOptions $json
     foreach($key in @('AwayMinutes','Schedule','StartMinute','EndMinute','QuietConfirmSeconds')){if($PSBoundParameters.ContainsKey($key)){$options[$key]=$PSBoundParameters[$key]}}
     $checked=Get-WorkstationOptions ([PSCustomObject]@{workstation=[PSCustomObject]$options})
+    if($AutoLoadOptions){
+        $checkedLoad=Read-AutoLoadOptions $AutoLoadOptions
+        foreach($key in $checkedLoad.Keys){if($checkedLoad[$key] -ne $AutoLoadOptions[$key]){throw '请选择有效智能切换参数；高性能 CPU 阈值至少应比均衡高 10%。'}}
+        $json | Add-Member -NotePropertyName autoLoad -NotePropertyValue ([PSCustomObject]$checkedLoad) -Force
+    }
     if(-not $checked.scheduleValid){throw '请选择有效日期、1–240 分钟等待、同一天的开始/结束时间，以及至少 10 秒的低负载确认时间。'}
     $minimum=[int]$json.modes.Idle.min
     $base=[int]$json.processorBaseMHz
@@ -36,6 +41,7 @@ function Save-WorkstationOptions {
     Write-AtomicJson $SettingsPath $json -Pretty
     $Script:ProfileSettingsHash=Get-ProfileFileHash $SettingsPath
     Write-ProfileEvent 'settings.workstation.saved' '保存附加省电配置' -Data @{enabled=$Enabled;freqMax=$Frequency;awayMinutes=$checked.awayMinutes;schedule=$checked.schedule;startMinute=$checked.startMinute;endMinute=$checked.endMinute;quietConfirmSeconds=$checked.quietConfirmSeconds;pausedUntil=$PausedUntil}
+    if($AutoLoadOptions){Write-ProfileEvent 'settings.auto-load.saved' '保存智能负载切换参数' -Data $checkedLoad}
 }
 function New-WorkstationCombo {
     param($Parent,[int]$X,[int]$Y,[int]$Width,$Choices,$Selected)
@@ -145,6 +151,7 @@ function Update-ModernDashboard {
     }
     $fields.mode.Text="$(if($Script:Settings.modes.ContainsKey($mode)){$Script:Settings.modes[$mode].name}else{$mode}) · $(if(Get-AutoEnabled){'自动'}else{'手动锁定'})"
     $d=Read-GameDetectionState
+    if($mode -eq 'Game' -and $d.Fresh -and $d.SmartLoadManaged -and -not $d.IsGame){$fields.mode.Text="$($Script:Settings.modes.Game.name) · 高负载加速 · $(if(Get-AutoEnabled){'自动'}else{'手动锁定'})"}
     $fields.reason.Text=if($d.Fresh){([string]$d.Reason -split ';')[0]}else{'等待新一轮检测 · 原有控制逻辑保持'}
     $Script:DashboardTip.SetToolTip($fields.reason,[string]$d.Reason)
     $idleSeconds=Get-UserActivityIdleSeconds
@@ -290,7 +297,8 @@ function Show-ModernSettings {
     $general=New-Object Windows.Forms.TabPage;$general.Text='常规'
     $plan=New-Object Windows.Forms.TabPage;$plan.Text='省电计划'
     $protect=New-Object Windows.Forms.TabPage;$protect.Text='应用保护'
-    foreach($page in @($general,$plan,$protect)){$page.BackColor=$form.BackColor;$tabs.TabPages.Add($page)}
+    $smart=New-Object Windows.Forms.TabPage;$smart.Text='智能切换'
+    foreach($page in @($general,$plan,$smart,$protect)){$page.BackColor=$form.BackColor;$tabs.TabPages.Add($page)}
     $form.Controls.Add($tabs)
     $toast=New-Object Windows.Forms.CheckBox;$toast.Text='切换时显示简短提示';$toast.Checked=(Get-ModernUIOptions).toastEnabled;$toast.SetBounds(18,18,350,26);$general.Controls.Add($toast)
     $general.Controls.Add((New-ModernLabel '托盘左键：运行状态；右键：快捷菜单' 18 58 405))
@@ -325,7 +333,15 @@ function Show-ModernSettings {
     $quiet=New-WorkstationCombo $plan 230 231 188 @(@(10,'至少 10 秒'),@(20,'至少 20 秒'),@(30,'至少 30 秒'),@(60,'至少 60 秒')) $w.quietConfirmSeconds
     $y=279
     foreach($text in @('时段采用北京时间；结束时撤销附加参数','游戏、高负载和手动档位始终优先','仅调整交流电上限；保留 C-state 等稳定参数')){$plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=31}
-    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;Start=$start;End=$end;Frequency=$frequency;Quiet=$quiet};Toast=$toast}
+    $policy=Read-AutoLoadOptions $json.autoLoad;$loadControls=@{};$y=22
+    foreach($entry in @(@('均衡 CPU 阈值','balancedCpu',@(20,25,30,40)),@('高性能 CPU 阈值','highCpu',@(60,70,80,90)),@('非游戏升至高性能确认','highConfirmCount',@(1,2,3)),@('降档连续确认','downConfirmCount',@(2,3,4,6)))){
+        $smart.Controls.Add((New-ModernLabel $entry[0] 18 $y 225));$choices=@()
+        foreach($value in $entry[2]){$choices+=,@($value,$(if($entry[1] -like '*Count'){"连续 $value 轮检测"}else{"$value%"}))}
+        $loadControls[$entry[1]]=New-WorkstationCombo $smart 250 ($y-2) 168 $choices $policy[$entry[1]];$y+=49
+    }
+    $y+=4
+    foreach($text in @('确认游戏：立即进入游戏档，不等待负载','进程 ≥80% 一核算力或工作 GPU ≥30%：均衡','工作 GPU ≥75%：确认后进入高性能','降档使用更低阈值，减少频繁来回切换','无键鼠输入不影响编译、导出等持续任务','沿用自动检测间隔；手动静音/均衡优先')){$smart.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=26}
+    $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;Start=$start;End=$end;Frequency=$frequency;Quiet=$quiet};Toast=$toast;AutoLoad=$loadControls}
     $y=18
     foreach($text in @('游戏主体进程存在时，禁止附加省电','暂不添加剪辑、建模软件进程名单','CPU 总占用 ≥25% 或单进程 ≥10% 阻止','单进程占用 ≥70% 的一核算力也阻止','任一 GPU 引擎 ≥15% 时阻止','检查失败不进入；低负载需连续两次确认')) {
         $protect.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38
@@ -335,7 +351,8 @@ function Show-ModernSettings {
         param($sender,$eventArgs)
         $settingsForm=$sender.FindForm();$plan=$settingsForm.Tag.Plan
         try {
-            Save-WorkstationOptions $plan.Enabled.Checked ([int]$plan.Frequency.SelectedItem.Value) '' -AwayMinutes ([int]$plan.Away.SelectedItem.Value) -Schedule ([string]$plan.Schedule.SelectedItem.Value) -StartMinute ([int]$plan.Start.SelectedItem.Value) -EndMinute ([int]$plan.End.SelectedItem.Value) -QuietConfirmSeconds ([int]$plan.Quiet.SelectedItem.Value) -ToastEnabled $settingsForm.Tag.Toast.Checked
+            $loadOptions=@{};foreach($key in $settingsForm.Tag.AutoLoad.Keys){$loadOptions[$key]=[int]$settingsForm.Tag.AutoLoad[$key].SelectedItem.Value}
+            Save-WorkstationOptions $plan.Enabled.Checked ([int]$plan.Frequency.SelectedItem.Value) '' -AwayMinutes ([int]$plan.Away.SelectedItem.Value) -Schedule ([string]$plan.Schedule.SelectedItem.Value) -StartMinute ([int]$plan.Start.SelectedItem.Value) -EndMinute ([int]$plan.End.SelectedItem.Value) -QuietConfirmSeconds ([int]$plan.Quiet.SelectedItem.Value) -ToastEnabled $settingsForm.Tag.Toast.Checked -AutoLoadOptions $loadOptions
             if(Get-Command Invoke-WorkstationWorker -ErrorAction SilentlyContinue){Invoke-WorkstationWorker -Restore}
             $settingsForm.Close()
         } catch {Write-ProfileEvent 'settings.save.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage};[void][Windows.Forms.MessageBox]::Show("保存失败: $_")}

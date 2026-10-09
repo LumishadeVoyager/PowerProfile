@@ -187,6 +187,7 @@ function Read-GameDetectionState {
             Fresh = ($ageSec -le $maxAgeSec)
             IsGame = [bool]$j.isGame
             ForceIdle = [bool]$j.forceIdle
+            SmartLoadManaged = [bool]$j.smartLoadManaged
             Source = [string]$j.source
             ProcessName = [string]$j.processName
             ProcessId = [int]$j.processId

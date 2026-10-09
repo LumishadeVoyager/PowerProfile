@@ -62,6 +62,7 @@ function Read-Settings {
         UserIdleSec = $DefaultUserIdleSec
         GameExitMissCount = $DefaultGameExitMissCount
         Detection = Read-DetectionOptions $null
+        AutoLoad = Read-AutoLoadOptions $null
     }
     # 深拷贝默认值
     foreach ($k in $DefaultProfiles.Keys) {
@@ -74,6 +75,7 @@ function Read-Settings {
         try {
             $json = Read-AtomicJson $path
             $result.Detection = Read-DetectionOptions $json.detection
+            $result.AutoLoad = Read-AutoLoadOptions $json.autoLoad
             if ($json.modes) {
                 foreach ($k in 'Idle','Balanced','Game') {
                     $m = $json.modes.$k
@@ -214,6 +216,9 @@ function Get-LoadSamples {
     $gpuVals = @()
     $cpuVals = @()
     $coreMaxVals = @()  # 每次采样所有核心里最高的占用 (识别单核瓶颈游戏, 如 RimWorld)
+    $workloadGpuVals=@();$cpuValidSamples=0;$gpuValidSamples=0
+    $processNames=@{}
+    foreach($process in @(Get-Process -ErrorAction SilentlyContinue)){$processNames[[int]$process.Id]=$process.ProcessName.ToLowerInvariant()}
     $gpuByPid = @{}
     $processCpu = @{}
     $cpuBefore = @{}
@@ -223,7 +228,9 @@ function Get-LoadSamples {
     }
     for ($i = 0; $i -lt $Count; $i++) {
         try {
-            $gpuSamples = Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction SilentlyContinue
+            $allGpuSamples = Get-Counter '\GPU Engine(*)\Utilization Percentage' -ErrorAction SilentlyContinue
+            $gpuSamples=if($allGpuSamples){@{CounterSamples=@($allGpuSamples.CounterSamples | Where-Object {$_.Path -match 'engtype_3D'})}}else{$null}
+            if($allGpuSamples -and @($allGpuSamples.CounterSamples | Where-Object {$_.Status -eq 0}).Count){$gpuValidSamples++;$workloadGpuVals+=Get-WorkloadGpu $allGpuSamples.CounterSamples $processNames}
             $sumGpu = if ($gpuSamples) {
                 ($gpuSamples.CounterSamples | Measure-Object CookedValue -Sum).Sum
             } else { 0 }
@@ -252,6 +259,7 @@ function Get-LoadSamples {
                 foreach ($s in $cpuAllCores.CounterSamples) {
                     if ($s.InstanceName -eq '_total') {
                         $cpuTotal = $s.CookedValue
+                        if($s.Status -eq 0 -and -not [double]::IsNaN($cpuTotal) -and -not [double]::IsInfinity($cpuTotal) -and $cpuTotal -ge 0 -and $cpuTotal -le 100){$cpuValidSamples++}
                     } else {
                         if ($s.CookedValue -gt $coreMax) { $coreMax = $s.CookedValue }
                     }
@@ -272,6 +280,7 @@ function Get-LoadSamples {
         } catch {}
     }
     $processGpu = @{}
+    $workloadCpu=@($processCpu.GetEnumerator() | Where-Object {$_.Key -ne $PID -and $_.Key -ne 0} | ForEach-Object {[double]$_.Value})
     foreach ($key in $gpuByPid.Keys) { $processGpu[$key] = [Math]::Min(100.0, [double]$gpuByPid[$key] / [Math]::Max(1, $Count)) }
     $topGpuPid = 0
     $topGpuAvg = 0
@@ -291,6 +300,10 @@ function Get-LoadSamples {
     }
     $topCpu = Get-TopCpuProcess
     return @{
+        Valid=($cpuValidSamples -eq $Count)
+        WorkloadGpu=if($workloadGpuVals.Count){($workloadGpuVals | Measure-Object -Average).Average}else{0}
+        WorkloadGpuValid=($gpuValidSamples -eq $Count)
+        WorkloadSingleCore=if($workloadCpu.Count){($workloadCpu | Measure-Object -Maximum).Maximum}else{0}
         ProcessCpu = $processCpu
         ProcessGpu = $processGpu
         MinGpu = if ($gpuVals.Count) { ($gpuVals | Measure-Object -Minimum).Minimum } else { 0 }
@@ -327,6 +340,7 @@ function Write-GameDetectionState {
             processId = [int]$Detection.ProcessId
             inputIdleSeconds = $InputIdleSeconds
             reason = [string]$Detection.Reason
+            smartLoadManaged = [bool]$Detection.SmartLoadManaged
         }
         Write-AtomicJson $DetectionStatePath $obj
     } catch {}
@@ -378,7 +392,7 @@ $Script:StartupNeutralProcesses = @(
         '', '(unknown)', 'explorer', 'dwm', 'logonui', 'lockapp', 'sihost',
         'shellexperiencehost', 'startmenuexperiencehost', 'searchhost', 'searchapp',
         'textinputhost', 'applicationframehost', 'userinit', 'winlogon'
-    ) + $Script:NonGameProcesses | Select-Object -Unique
+    ) + @('wallpaper32','wallpaper64','wallpaperui','steam','steamwebhelper','epicgameslauncher') | Select-Object -Unique
 )
 
 function Get-BootStamp {
@@ -458,6 +472,8 @@ function Test-GameRunning {
     $load = Get-LoadSamples -Count 2 -IntervalMs 700
     $detection = Get-SessionGameDetection -Foreground $fs -Load $load -Options $Settings.Detection `
         -NonGameProcesses $Script:HardNonGameProcesses -StateDirectory $PSScriptRoot -ReadOnly:$Diagnose
+    $detection.Load=$load
+    $detection.SmartLoadManaged=$true
     if ($detection.IsGame) {
         # A real library/confirmed game releases startup quiet with native HID input too.
         if (-not $Diagnose) {
@@ -469,9 +485,6 @@ function Test-GameRunning {
     $startupGuard = Test-StartupGuard -Foreground $fs -IdleSeconds $idle
     if ($startupGuard.Active) {
         return @{ IsGame = $false; ForceIdle = $true; Source = 'StartupGuard'; Reason = $startupGuard.Reason }
-    }
-    if ($CurrentMode -ne 'Game' -and $idle -ge $Settings.UserIdleSec -and $load.AvgCpu -lt 20 -and $load.AvgGpu -lt 10) {
-        return @{ IsGame = $false; ForceIdle = $true; Source = 'UserIdleLowLoad'; Reason = "无人输入 ${idle}s 且无游戏、低负载，保持静音" }
     }
     return $detection
 }
@@ -596,6 +609,10 @@ if($WorkstationOnly -and -not $Diagnose){
 }
 if ($Diagnose) {
     $diagnostic = Test-GameRunning -InputIdleSeconds $ActivityIdleSec
+    if($diagnostic.Load){
+        $summary=@{};foreach($key in $diagnostic.Load.Keys){if($key -notin @('ProcessCpu','ProcessGpu')){$summary[$key]=$diagnostic.Load[$key]}}
+        $diagnostic.Load=$summary
+    }
     [PSCustomObject]@{ detection = $diagnostic; options = $Settings.Detection; gameRoots = @(Get-InstalledGameRoots $Settings.Detection) } | ConvertTo-Json -Depth 7
     return
 }
@@ -605,13 +622,24 @@ if ($Mode -eq 'Auto') {
     $current = if (Test-Path $statePath) { (Get-Content $statePath -Raw).Trim() } else { 'Idle' }
 
     $detection = Test-GameRunning -CurrentMode $current -InputIdleSeconds $ActivityIdleSec
+    $loadStatePath=Join-Path $PSScriptRoot 'auto_load_state.json'
+    $previousLoad=$null
+    try{if(Test-Path $loadStatePath){$previousLoad=Read-AtomicJson $loadStatePath}}catch{}
+    $loadDecision=Get-AutoLoadTransition $current $detection.Load $previousLoad $Settings.AutoLoad -MaxAgeSeconds ([Math]::Max(60,$Settings.AutoIntervalSec*3))
+    if(-not $detection.IsGame -and -not $detection.ForceIdle){
+        $detection.Reason="$($loadDecision.Reason); $($detection.Reason)"
+        if(-not $loadDecision.Valid){$detection.Defer=$true}
+    }
     Write-GameDetectionState -Detection $detection -InputIdleSeconds $ActivityIdleSec
     $miss = 0
     if (Test-Path $missCountPath) {
         [void][int]::TryParse(((Get-Content $missCountPath -Raw -ErrorAction SilentlyContinue) -as [string]), [ref]$miss)
     }
-    $transition = Get-AutoModeTransition $current $detection $miss $Settings.GameExitMissCount
-    Write-ProfileEvent 'auto.decision' $detection.Reason -Data @{before=$current;after=$transition.Mode;missCount=$transition.MissCount;source=$detection.Source;process=$detection.ProcessName;processId=$detection.ProcessId;inputIdleSeconds=$ActivityIdleSec}
+    $transition = Get-AutoModeTransition $current $detection $miss $Settings.GameExitMissCount $loadDecision.Mode
+    if($detection.IsGame -or $detection.ForceIdle){$loadDecision.State.highCount=0;$loadDecision.State.downCount=0}
+    $loadDecision.State.mode=$transition.Mode
+    Write-AtomicJson $loadStatePath $loadDecision.State
+    Write-ProfileEvent 'auto.decision' $detection.Reason -Data @{before=$current;after=$transition.Mode;missCount=$transition.MissCount;source=$detection.Source;process=$detection.ProcessName;processId=$detection.ProcessId;inputIdleSeconds=$ActivityIdleSec;load=$loadDecision.State;loadValid=$loadDecision.Valid;gpuAvailable=$detection.Load.WorkloadGpuValid;policy=$Settings.AutoLoad}
     $needsApply = $transition.Mode -ne $current
     if ($detection.ForceIdle) {
         $bootStamp = Get-BootStamp
@@ -627,6 +655,7 @@ if ($Mode -eq 'Auto') {
     Write-Host "[AUTO] mode=$($transition.Mode) miss=$($transition.MissCount)/$($Settings.GameExitMissCount) ($($detection.Reason))"
     Invoke-WorkstationEvaluation $PSScriptRoot $transition.Mode $Settings.Detection
 } else {
+    Remove-Item -LiteralPath (Join-Path $PSScriptRoot 'auto_load_state.json') -ErrorAction SilentlyContinue
     $manualReason = if ($Reason) { $Reason } else { "手动切换: 命令行参数 -Mode $Mode" }
     Set-PowerProfile -Name $Mode -Reason $manualReason
     Write-Host "[MANUAL] 切换到 $Mode 模式: $($Profiles[$Mode].Desc)" -ForegroundColor Cyan

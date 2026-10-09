@@ -44,6 +44,12 @@
     "protectedProcesses": [],
     "pausedUntil": ""
   },
+  "autoLoad": {
+    "balancedCpu": 25,
+    "highCpu": 70,
+    "highConfirmCount": 2,
+    "downConfirmCount": 3
+  },
   "detection": {
     "discoverSteam": true,
     "discoverEpic": true,

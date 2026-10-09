@@ -123,6 +123,10 @@ try {
     $settingsForm=$Script:routedSettingsForm
     $settingsForm.Show();[Windows.Forms.Application]::DoEvents()
     $plan=$settingsForm.Tag.Plan
+    Assert-Equal 'smart policy exposes four dropdown controls' $settingsForm.Tag.AutoLoad.Count 4
+    Assert-Equal 'balanced CPU default is moderate load' $settingsForm.Tag.AutoLoad.balancedCpu.SelectedItem.Value 25
+    $settingsForm.Tag.AutoLoad.balancedCpu.SelectedIndex=2
+    $settingsForm.Tag.AutoLoad.highConfirmCount.SelectedIndex=2
     Assert-Equal 'schedule dropdown defaults to statutory working days' $plan.Schedule.SelectedItem.Value 'ChineseWorkdays'
     Assert-Equal 'wait dropdown keeps twenty minute default' $plan.Away.SelectedItem.Value 20
     Assert-Equal 'all plan selectors are true dropdowns' (@($plan.Schedule,$plan.Away,$plan.Start,$plan.End,$plan.Frequency,$plan.Quiet | Where-Object {$_.DropDownStyle -ne 'DropDownList'}).Count) 0
@@ -143,6 +147,8 @@ try {
     Assert-Equal 'wait dropdown saved' $after.workstation.awayMinutes 5
     Assert-Equal 'all-day interval saved' ($after.workstation.startMinute -eq 0 -and $after.workstation.endMinute -eq 1440) $true
     Assert-Equal 'quiet confirmation saved' $after.workstation.quietConfirmSeconds 30
+    Assert-Equal 'balanced CPU threshold saves from dropdown' $after.autoLoad.balancedCpu 30
+    Assert-Equal 'high load confirmation saves from dropdown' $after.autoLoad.highConfirmCount 3
     Save-WorkstationOptions $false ([int]$after.workstation.freqMax) '2026-10-11T00:00:00'
     $toggled=Read-AtomicJson $SettingsPath
     Assert-Equal 'tray enable/pause preserves chosen wait' $toggled.workstation.awayMinutes 5

@@ -21,3 +21,4 @@ tray_ui_request.txt
 logs/
 energy.settings.json
 energy.history.json
+auto_load_state.json
