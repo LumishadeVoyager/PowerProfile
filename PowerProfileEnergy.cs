@@ -87,8 +87,10 @@ public sealed class ProfileEnergyHistory {public string Device {get;set;} public
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} }
 public sealed class ProfileEnergySnapshot {
     public bool Configured; public bool Busy; public bool? On; public double? Watts; public DateTime ObservedAt;
-    public string Status="未连接 · 请设置插座";public decimal? Price;public double? TodayKWh,MonthKWh;
-    public double TodaySeconds;public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();
+    public string Status="未连接 · 请设置插座";public decimal? Price;public double? TodayKWh,WeekKWh,MonthKWh;
+    public double TodaySeconds,WeekSeconds,MonthSeconds;public string LocalDay,WeekStart,MonthStart;
+    public Dictionary<string,ProfileEnergyDay> Days=new Dictionary<string,ProfileEnergyDay>();
+    public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();
 }
 public sealed class ProfileEnergyService : IDisposable {
     readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;
@@ -122,11 +124,21 @@ public sealed class ProfileEnergyService : IDisposable {
         config=next;snapshot=new ProfileEnergySnapshot{Configured=!String.IsNullOrWhiteSpace(address),Price=price,Status=String.IsNullOrWhiteSpace(address)?"未连接 · 请设置插座":"等待连接"};
         timer.Change(snapshot.Configured && autoPoll?0:Timeout.Infinite,snapshot.Configured && autoPoll?60000:Timeout.Infinite);Event("energy.config.saved","已保存插座配置与固定电价；凭据使用 Windows 当前用户加密","INFO");}}
     public ProfileEnergySnapshot GetSnapshot(){lock(gate){
-        var r=new ProfileEnergySnapshot{Configured=snapshot.Configured,Busy=busy,On=snapshot.On,Watts=snapshot.Watts,ObservedAt=snapshot.ObservedAt,Status=snapshot.Status,Price=config.Price,Points=new List<ProfileEnergyPoint>(history.Points)};
-        string day=China(DateTime.UtcNow).ToString("yyyy-MM-dd"),month=day.Substring(0,7);ProfileEnergyDay value;
-        if(history.Days.TryGetValue(day,out value)){r.TodayKWh=value.KWh;r.TodaySeconds=value.Seconds;}
-        foreach(var d in history.Days)if(d.Key.StartsWith(month,StringComparison.Ordinal)){r.MonthKWh=(r.MonthKWh??0)+d.Value.KWh;}
+        var r=Summarize(history,config.Price,DateTime.UtcNow);
+        r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);
         return r;}}
+    public static ProfileEnergySnapshot Summarize(ProfileEnergyHistory h,decimal? price,DateTime utcNow){
+        DateTime today=China(utcNow).Date,week=today.AddDays(-(((int)today.DayOfWeek+6)%7)),month=new DateTime(today.Year,today.Month,1);
+        var r=new ProfileEnergySnapshot{Price=price,LocalDay=today.ToString("yyyy-MM-dd"),WeekStart=week.ToString("yyyy-MM-dd"),MonthStart=month.ToString("yyyy-MM-dd")};
+        foreach(var item in h.Days){DateTime date;var value=item.Value;
+            if(!DateTime.TryParseExact(item.Key,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date) || date>today || value==null || Double.IsNaN(value.KWh) || Double.IsInfinity(value.KWh) || value.KWh<0 || Double.IsNaN(value.Seconds) || Double.IsInfinity(value.Seconds) || value.Seconds<0)continue;
+            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds};
+            if(date==today){r.TodayKWh=value.KWh;r.TodaySeconds=value.Seconds;}
+            if(date>=week){r.WeekKWh=(r.WeekKWh??0)+value.KWh;r.WeekSeconds+=value.Seconds;}
+            if(date>=month){r.MonthKWh=(r.MonthKWh??0)+value.KWh;r.MonthSeconds+=value.Seconds;}
+        }
+        return r;
+    }
     public void Refresh(){Start(null);}
     public void SetSwitch(bool on){Start(on);}
     void Start(bool? command){lock(gate){if(disposed || busy || !snapshot.Configured)return;busy=true;snapshot.Busy=true;}
@@ -163,7 +175,7 @@ public sealed class ProfileEnergyService : IDisposable {
                     string key=local.ToString("yyyy-MM-dd");if(!h.Days.ContainsKey(key))h.Days[key]=new ProfileEnergyDay();h.Days[key].KWh+=(startW+endW)/2*duration/3600000;h.Days[key].Seconds+=duration;at=end;}
             }}
         h.Points.Add(new ProfileEnergyPoint{Time=now,Watts=watts,BreakBefore=gap});h.Points.RemoveAll(p=>p.Time<now.AddDays(-1));
-        string oldest=China(now).AddDays(-35).ToString("yyyy-MM-dd");var remove=new List<string>();foreach(var d in h.Days)if(String.CompareOrdinal(d.Key,oldest)<0)remove.Add(d.Key);foreach(var key in remove)h.Days.Remove(key);
+        string oldest=China(now).AddDays(-400).ToString("yyyy-MM-dd");var remove=new List<string>();foreach(var d in h.Days)if(String.CompareOrdinal(d.Key,oldest)<0)remove.Add(d.Key);foreach(var key in remove)h.Days.Remove(key);
     }
     public void Dispose(){lock(gate){disposed=true;timer.Dispose();}}
 }

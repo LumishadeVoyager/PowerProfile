@@ -59,6 +59,33 @@ try {
     Assert-Equal 'energy details visible' $Script:EnergyDetails.Visible $true
     Assert-Equal 'unconfigured switch is disabled' $Script:EnergyDetails.Tag.Fields.switch.Enabled $false
     Assert-Equal 'unconfigured chart has no fake data points' $Script:EnergyDetails.Tag.Chart.Points.Count 0
+    Assert-Equal 'daily table defaults to thirty dates' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 30
+    Assert-Equal 'uncollected daily rows are labeled rather than zero billed' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[1].Value '未采集'
+    Assert-Equal 'weekly total is displayed without invented readings' $Script:EnergyDetails.Tag.Fields.week.Text '等待累计'
+    $Script:EnergyDetails.Tag.Range.SelectedIndex=0
+    Assert-Equal 'daily range can switch to seven days' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 7
+    $dailyFixture=New-Object ProfileEnergyHistory;$dailyFixture.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
+    $localDay=[TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')).ToString('yyyy-MM-dd')
+    $dailyFixture.Days[$localDay]=New-Object ProfileEnergyDay;$dailyFixture.Days[$localDay].Seconds=3600
+    $dailyState=[ProfileEnergyService]::Summarize($dailyFixture,[decimal]0.7,[DateTime]::UtcNow)
+    Update-EnergyDailyRows $dailyState
+    Assert-Equal 'recorded zero remains distinct from uncollected date in table' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[1].Value '0.000 kWh'
+    Assert-Equal 'zero energy yields zero cost at configured tariff' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[2].Value '¥0.00'
+    $Script:EnergyDetails.Tag.Group.SelectedIndex=1
+    Assert-Equal 'weekly history exposes eight calendar weeks' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 8
+    Update-EnergyDailyRows $dailyState
+    Assert-Equal 'weekly history aggregates daily energy and price' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[2].Value '¥0.00'
+    $Script:EnergyDetails.Tag.Group.SelectedIndex=2
+    Assert-Equal 'monthly history exposes six calendar months' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 6
+    Assert-Equal 'monthly row uses current China calendar month' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[0].Value $localDay.Substring(0,7)
+    $Script:EnergyDetails.Tag.Group.SelectedIndex=0
+    $energyForm=$Script:EnergyDetails
+    foreach($parent in @($energyForm)+@($energyForm.Controls | Where-Object {$_ -is [Windows.Forms.Panel]})){
+        Assert-Equal 'energy controls fit their parent' (@($parent.Controls | Where-Object {$_.Bottom -gt $parent.ClientSize.Height -or $_.Right -gt $parent.ClientSize.Width}).Count) 0
+        $controls=@($parent.Controls)
+        for($a=0;$a -lt $controls.Count;$a++){for($b=$a+1;$b -lt $controls.Count;$b++){if($controls[$a].Bounds.IntersectsWith($controls[$b].Bounds)){throw "Overlapping energy controls: $($controls[$a].Text) / $($controls[$b].Text)"}}}
+    }
+    Write-Host 'PASS energy sibling controls do not overlap'
     $Script:EnergyDetails.Close()
     Assert-Equal 'closing details releases window only' ($null -eq $Script:EnergyDetails -and $null -ne $Script:EnergyService) $true
     # Render each actual mode and overlay state with isolated telemetry, without changing power.

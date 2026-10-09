@@ -36,6 +36,25 @@ try {
     $h.Points[3].InvalidAfter=$true
     [ProfileEnergyService]::AddSample($h,$at.AddSeconds(500),500)
     Assert 'failed poll also breaks short-gap energy integration' ($h.Days['2026-10-09'].Seconds -eq 90)
+    $periods=New-Object ProfileEnergyHistory;$periods.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
+    foreach($pair in @(@('2025-12-28',100),@('2025-12-29',1),@('2025-12-31',2),@('2026-01-01',3),@('2026-01-04',4),@('2026-01-05',5))){$periods.Days[$pair[0]]=New-Object ProfileEnergyDay;$periods.Days[$pair[0]].KWh=$pair[1];$periods.Days[$pair[0]].Seconds=3600}
+    $report=[ProfileEnergyService]::Summarize($periods,[decimal]0.7,([DateTime]'2026-01-04T04:00:00Z'))
+    Assert 'Sunday current week starts previous-year Monday' ($report.WeekStart -eq '2025-12-29' -and $report.WeekKWh -eq 10)
+    Assert 'calendar month excludes previous-year samples' ($report.MonthKWh -eq 7 -and $report.TodayKWh -eq 4)
+    Assert 'period coverage counts only collected intervals' ($report.WeekSeconds -eq 14400 -and $report.MonthSeconds -eq 7200)
+    Assert 'future samples never inflate present totals' (-not $report.Days.ContainsKey('2026-01-05'))
+    Assert 'period cost uses fixed tariff' ((Format-EnergyCost $report.WeekKWh $report.Price) -eq '¥7.00')
+    $monday=[ProfileEnergyService]::Summarize($periods,[decimal]0.7,([DateTime]'2026-01-04T16:00:00Z'))
+    Assert 'China Monday midnight rolls week without mixing previous week' ($monday.LocalDay -eq '2026-01-05' -and $monday.WeekStart -eq '2026-01-05' -and $monday.WeekKWh -eq 5)
+    $empty=New-Object ProfileEnergyHistory;$empty.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
+    $none=[ProfileEnergyService]::Summarize($empty,[decimal]0.7,([DateTime]'2026-01-04T04:00:00Z'))
+    Assert 'uncollected periods remain unknown rather than zero' ($null -eq $none.TodayKWh -and $null -eq $none.WeekKWh -and $null -eq $none.MonthKWh)
+    $empty.Days['2026-01-04']=New-Object ProfileEnergyDay;$empty.Days['2026-01-04'].Seconds=60
+    $zero=[ProfileEnergyService]::Summarize($empty,[decimal]0.7,([DateTime]'2026-01-04T04:00:00Z'))
+    Assert 'measured zero energy remains a valid zero' ($zero.TodayKWh -eq 0 -and $zero.TodaySeconds -eq 60)
+    $h.Days['2026-04-01']=New-Object ProfileEnergyDay;$h.Days['2025-01-01']=New-Object ProfileEnergyDay
+    [ProfileEnergyService]::AddSample($h,$at.AddSeconds(600),500)
+    Assert 'daily history retains 400 days without changing chart horizon' ($h.Days.ContainsKey('2026-04-01') -and -not $h.Days.ContainsKey('2025-01-01'))
     [byte[]]$key=0..15;[byte[]]$header=New-Object byte[] 16
     $encoded=[ProfilePlugTransport]::Encode($header,$key,'{"id":1,"result":[]}')
     Assert 'authenticated protocol encryption roundtrip' ([ProfilePlugTransport]::Decode($encoded,$key) -eq '{"id":1,"result":[]}')
