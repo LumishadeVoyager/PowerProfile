@@ -24,18 +24,24 @@ if (-not $isAdmin) {
 Write-Host "[1/5] 管理员权限 OK" -ForegroundColor Green
 
 # 2. 验证文件存在
-foreach ($f in @($WorkerPath, $TrayPath, $VbsPath)) {
+foreach ($f in @($WorkerPath, $TrayPath, $VbsPath, (Join-Path $ScriptDir 'PowerProfileLogic.ps1'), (Join-Path $ScriptDir 'PowerProfileDetection.ps1'))) {
     if (-not (Test-Path $f)) {
         Write-Host "[X] 文件缺失: $f" -ForegroundColor Red
         exit 1
     }
 }
 Write-Host "[2/5] 脚本文件齐全" -ForegroundColor Green
+foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProfileModernUI.ps1','PowerProfileUI.cs','Read-SystemStatus.ps1','legacy\PowerProfileTray.ps1')) {
+    if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}
+}
+. (Join-Path $ScriptDir 'PowerProfileVersion.ps1')
+Initialize-LegacyConfiguration $ScriptDir
 
 # 3. 测试 Worker 脚本
 Write-Host "[3/5] 测试 Worker 脚本..." -ForegroundColor Yellow
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $WorkerPath -Mode 'Idle'
+    if ($LASTEXITCODE -ne 0) { throw "Worker exited with code $LASTEXITCODE" }
     Write-Host "      已临时切到 Idle 模式" -ForegroundColor Green
 } catch {
     Write-Host "[X] Worker 脚本失败: $_" -ForegroundColor Red
@@ -77,7 +83,7 @@ Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
     $_.CommandLine -like '*PowerProfileTray*' -or $_.MainWindowTitle -like '*PowerProfile*'
 } | Stop-Process -Force -ErrorAction SilentlyContinue
 
-Start-Process wscript.exe -ArgumentList "`"$VbsPath`""
+Start-Process wscript.exe -ArgumentList "`"$VbsPath`"" -WindowStyle Hidden
 Start-Sleep -Seconds 3
 
 Write-Host ""

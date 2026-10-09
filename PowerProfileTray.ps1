@@ -8,8 +8,8 @@ $AutoEnabledPath = Join-Path $ScriptDir 'auto_enabled.txt'
 $DetectionStatePath = Join-Path $ScriptDir 'game_detection_state.json'
 $LegacyIdleQuietStatePath = Join-Path $ScriptDir 'idle_quiet_state.json'
 $LifecycleLog = Join-Path $ScriptDir 'tray_lifecycle.log'
-$LogicScript = Join-Path $ScriptDir 'PowerProfileLogic.ps1'
-. $LogicScript
+$DetectionScript = Join-Path $ScriptDir 'PowerProfileDetection.ps1'
+. $DetectionScript
 
 function Write-LifecycleLog {
     param([string]$Msg)
@@ -47,6 +47,7 @@ Write-LifecycleLog "[START] 单实例锁已获取, 托盘启动"
 
 [void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
 [void][System.Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+[Windows.Forms.Application]::EnableVisualStyles()
 
 # 进程退出时主动释放锁 (避免 PS host 残留)
 $ExitHandler = {
@@ -121,32 +122,12 @@ public class Win32Idle {
 '@
 }
 
-# 返回"有效 idle 秒数": 如果前台是全屏游戏 (D3D 应用), 直接返回 0 (用户在用手柄玩)
+# 已确认游戏优先于键鼠空闲；游戏判断统一由 worker 负责。
 function Get-EffectiveIdle {
     $rawIdle = [Win32Idle]::GetIdleSeconds()
-    if ($rawIdle -le 30) { return $rawIdle }   # 短时间内不必判, 鼠标键盘最近用过
-
-    # idle 较长才检查是不是全屏游戏 (避免每次 tick 都做模块枚举)
-    $hwnd = [Win32Idle]::GetForegroundWindow()
-    if ($hwnd -eq [IntPtr]::Zero) { return $rawIdle }
-    $rect = New-Object Win32Idle+RECT
-    [void][Win32Idle]::GetWindowRect($hwnd, [ref]$rect)
-    $w = $rect.Right - $rect.Left
-    $h = $rect.Bottom - $rect.Top
-    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $isFs = ($w -ge ($screen.Width - 2)) -and ($h -ge ($screen.Height - 2))
-    if (-not $isFs) { return $rawIdle }
-
-    $procId = 0
-    [void][Win32Idle]::GetWindowThreadProcessId($hwnd, [ref]$procId)
-    $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    if (-not $proc) { return $rawIdle }
-    try {
-        $hasD3D = ($proc.Modules | Where-Object {
-            $_.ModuleName -match '^(d3d9|d3d10|d3d11|d3d12|dxgi|vulkan-1|opengl32)\.dll$'
-        } | Measure-Object).Count -gt 0
-        if ($hasD3D) { return 0 }   # 全屏 + 3D = 玩游戏, 不算 idle
-    } catch {}
+    if ($rawIdle -le 30) { return $rawIdle }
+    $detection = Read-GameDetectionState
+    if ($detection.Fresh -and $detection.IsGame) { return 0 }
     return $rawIdle
 }
 
@@ -264,9 +245,9 @@ function Set-AutoEnabled {
 
 # === 颜色 + 字体 ==============================================================
 $ModeColors = @{
-    Idle = [System.Drawing.Color]::FromArgb(76, 175, 80)      # 绿
-    Balanced = [System.Drawing.Color]::FromArgb(33, 150, 243) # 蓝
-    Game = [System.Drawing.Color]::FromArgb(244, 67, 54)      # 红
+    Idle = [System.Drawing.Color]::FromArgb(36, 124, 112)
+    Balanced = [System.Drawing.Color]::FromArgb(39, 106, 159)
+    Game = [System.Drawing.Color]::FromArgb(151, 75, 83)
     Unknown = [System.Drawing.Color]::Gray
 }
 $ModeLabels = @{
@@ -278,8 +259,8 @@ $ModeLetters = @{
     Idle = 'I'; Balanced = 'B'; Game = 'G'
 }
 
-$NormalFont = New-Object System.Drawing.Font 'Segoe UI', 9, ([System.Drawing.FontStyle]::Regular)
-$BoldFont = New-Object System.Drawing.Font 'Segoe UI', 9, ([System.Drawing.FontStyle]::Bold)
+$NormalFont = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9, ([System.Drawing.FontStyle]::Regular)
+$BoldFont = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9, ([System.Drawing.FontStyle]::Bold)
 
 # === 16x16 彩色圆点 (菜单图标) ================================================
 function New-ColorDot {
@@ -346,6 +327,8 @@ function Close-Toast {
 function Show-ModeToast {
     param([string]$Mode, [string]$SubText = '')
 
+    if ($Mode -eq 'Game' -or -not (Get-ModernUIOptions).toastEnabled) { Close-Toast; return }
+
     $letter = if ($ModeLetters.ContainsKey($Mode)) { $ModeLetters[$Mode] } else { '?' }
     $color = if ($ModeColors.ContainsKey($Mode)) { $ModeColors[$Mode] } else { $ModeColors['Unknown'] }
     $label = if ($ModeLabels.ContainsKey($Mode)) { $ModeLabels[$Mode] } else { $Mode }
@@ -363,12 +346,12 @@ function Show-ModeToast {
     $hasSub = -not [string]::IsNullOrEmpty($SubText)
     $W = 220; $H = if ($hasSub) { 60 } else { 48 }
 
-    $form = New-Object System.Windows.Forms.Form
+    $form = New-Object ProfileToastForm
     $form.FormBorderStyle = 'None'
     $form.StartPosition = 'Manual'
     $form.ShowInTaskbar = $false
     $form.TopMost = $true
-    $form.BackColor = [System.Drawing.Color]::FromArgb(28, 28, 30)
+    $form.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 250)
     $form.Opacity = 0          # 从 0 开始, 由动画 Timer 淡入
     $form.Size = New-Object System.Drawing.Size $W, $H
     $form.Region = [System.Drawing.Region]::FromHrgn(
@@ -392,8 +375,8 @@ function Show-ModeToast {
     # 主标签
     $textLabel = New-Object System.Windows.Forms.Label
     $textLabel.Text = $label
-    $textLabel.Font = New-Object System.Drawing.Font 'Segoe UI', 11, ([System.Drawing.FontStyle]::Regular)
-    $textLabel.ForeColor = [System.Drawing.Color]::White
+    $textLabel.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 10, ([System.Drawing.FontStyle]::Regular)
+    $textLabel.ForeColor = [System.Drawing.Color]::FromArgb(34,34,34)
     $textLabel.AutoSize = $false
     $textLabel.BackColor = [System.Drawing.Color]::Transparent
 
@@ -404,8 +387,8 @@ function Show-ModeToast {
 
         $subLabel = New-Object System.Windows.Forms.Label
         $subLabel.Text = $SubText
-        $subLabel.Font = New-Object System.Drawing.Font 'Segoe UI', 8, ([System.Drawing.FontStyle]::Regular)
-        $subLabel.ForeColor = [System.Drawing.Color]::FromArgb(170, 170, 175)
+        $subLabel.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 8, ([System.Drawing.FontStyle]::Regular)
+        $subLabel.ForeColor = [System.Drawing.Color]::FromArgb(96, 96, 96)
         $subLabel.AutoSize = $false
         $subLabel.BackColor = [System.Drawing.Color]::Transparent
         $subLabel.TextAlign = 'TopLeft'
@@ -567,8 +550,18 @@ function Save-Settings {
         gameIdleQuietMinutes = $Settings.gameIdleQuietMinutes
         gameExitMissCount = $Settings.gameExitMissCount
     }
-    $json = $obj | ConvertTo-Json -Depth 5
-    [System.IO.File]::WriteAllText($SettingsPath, $json, (New-Object System.Text.UTF8Encoding $true))
+    # Preserve advanced/local rules when the GUI edits only its own fields.
+    if (Test-Path -LiteralPath $SettingsPath) {
+        try {
+            $existing = Get-Content -LiteralPath $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($property in $existing.PSObject.Properties) {
+                if ($property.Name -notin @($obj.PSObject.Properties.Name)) {
+                    $obj | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                }
+            }
+        } catch { throw '现有设置无法读取，请先修复 settings.json，避免覆盖本机规则。' }
+    }
+    Write-AtomicJson $SettingsPath $obj -Pretty
 }
 
 $Script:Settings = Read-Settings
@@ -670,6 +663,20 @@ function Get-CurrentMode {
     return 'Unknown'
 }
 
+function Start-HiddenPowerShell {
+    param([string[]]$Arguments)
+
+    # Start-Process -WindowStyle Hidden can still briefly create a console window
+    # on Windows. CREATE_NO_WINDOW is the reliable option for this periodic worker.
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $startInfo.Arguments = $Arguments -join ' '
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    return [System.Diagnostics.Process]::Start($startInfo)
+}
+
 # 非阻塞调用 worker. 之前 -Wait 会卡 UI 2 秒采样时间; 现在 fire-and-forget,
 # 状态变化由文件监视 timer 检测.
 function Invoke-Worker {
@@ -678,12 +685,11 @@ function Invoke-Worker {
         [string]$Reason = '',
         [int]$ActivityIdleSec = -1
     )
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $WorkerScript, '-Mode', $Mode)
-    if ($Reason) { $args += @('-Reason', $Reason) }
+    if ($Mode -eq 'Auto' -and $Script:WorkerProcess -and -not $Script:WorkerProcess.HasExited) { return }
+    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $WorkerScript), '-Mode', $Mode)
+    if ($Reason) { $args += @('-Reason', ('"{0} "' -f ($Reason -replace '["\r\n]', ' '))) }
     if ($Mode -eq 'Auto' -and $ActivityIdleSec -ge 0) { $args += @('-ActivityIdleSec', $ActivityIdleSec) }
-    Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList $args `
-        -WindowStyle Hidden
+    $Script:WorkerProcess = Start-HiddenPowerShell -Arguments $args
 }
 
 # === Show-Settings: 拖滑块 + 改模式名 + 其他设置 ==============================
@@ -952,6 +958,8 @@ function Show-Settings {
     [void]$form.ShowDialog()
 }
 
+. (Join-Path $ScriptDir 'PowerProfileModernUI.ps1')
+
 # === 托盘图标 =================================================================
 $notify = New-Object System.Windows.Forms.NotifyIcon
 $notify.Visible = $true
@@ -959,6 +967,8 @@ $notify.Visible = $true
 # === 右键菜单 =================================================================
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $menu.ShowImageMargin = $true
+$menu.Font=$Script:ModernFont
+$menu.ImageScalingSize=New-Object Drawing.Size 16,16
 
 $menuAuto = $menu.Items.Add('自动检测')
 $menuAuto.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(158, 158, 158))
@@ -982,8 +992,13 @@ $menuStatus.Enabled = $false
 $menuSettings = $menu.Items.Add('设置...')
 $menuSettings.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(96, 125, 139))
 
+$menuMonitor=New-Object Windows.Forms.ToolStripMenuItem('运行状态...')
+$menu.Items.Insert(0,$menuMonitor)
+
 $menuLog = $menu.Items.Add('打开日志')
 $menuLog.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(120, 144, 156))
+
+$menuLegacy=$menu.Items.Add('切换为旧版')
 
 [void]$menu.Items.Add('-')
 
@@ -997,9 +1012,9 @@ function Refresh-MenuLabels {
     $balancedFreq = Format-Freq $Script:Settings.modes.Balanced.freqMax
     $gameFreq     = Format-Freq $Script:Settings.modes.Game.freqMax
     $Script:MenuBaseLabels = @{
-        Idle     = ("{0} 模式 ({1})" -f $Script:Settings.modes.Idle.name, $idleFreq)
-        Balanced = ("{0} 模式 ({1})" -f $Script:Settings.modes.Balanced.name, $balancedFreq)
-        Game     = ("{0} 模式 ({1})" -f $Script:Settings.modes.Game.name, $gameFreq)
+        Idle     = ("{0}    {1} 上限" -f $Script:Settings.modes.Idle.name, $idleFreq)
+        Balanced = ("{0}    {1} 上限" -f $Script:Settings.modes.Balanced.name, $balancedFreq)
+        Game     = ("{0}    {1}" -f $Script:Settings.modes.Game.name, $gameFreq)
     }
     # 不直接改菜单文本; Update-TrayIcon 会拼上 "● [当前]" 装饰
     if (Get-Command Update-TrayIcon -ErrorAction SilentlyContinue) { Update-TrayIcon }
@@ -1013,24 +1028,28 @@ function Update-TrayIcon {
     $letter = if ($ModeLetters.ContainsKey($mode)) { $ModeLetters[$mode] } else { '?' }
     $color = if ($ModeColors.ContainsKey($mode)) { $ModeColors[$mode] } else { $ModeColors['Unknown'] }
 
+    if ($Script:IconMode -ne $mode -or -not $notify.Icon) {
     if ($notify.Icon) {
         $oldIcon = $notify.Icon
         $notify.Icon = $null
         $oldIcon.Dispose()
     }
-    $notify.Icon = New-LetterIcon -Letter $letter -BgColor $color
+    $notify.Icon = [ProfileVisual]::CreateIcon($mode)
+    $Script:IconMode=$mode
+    }
     $autoLabel = if ($autoOn) { 'Auto' } else { '手动锁定' }
     $notify.Text = "PowerProfile: $mode ($autoLabel)"
 
     if ($autoOn) {
         $menuAuto.Font = $BoldFont
-        $menuAuto.Text = '√ 自动检测 (开启中)'
+        $menuAuto.Text = '自动切换'
         $menuAuto.ForeColor = [System.Drawing.Color]::FromArgb(76, 175, 80)
     } else {
         $menuAuto.Font = $NormalFont
-        $menuAuto.Text = '   自动检测 (关闭, 手动锁定)'
+        $menuAuto.Text = '自动切换（关闭）'
         $menuAuto.ForeColor = [System.Drawing.SystemColors]::ControlText
     }
+    $menuAuto.Checked=$autoOn
 
     $items = @{
         'Idle' = $menuIdle
@@ -1041,11 +1060,13 @@ function Update-TrayIcon {
     foreach ($k in $items.Keys) {
         if ($k -eq $mode) {
             $items[$k].Font = $BoldFont
-            $items[$k].Text = "● $($labels[$k])  [当前]"
+            $items[$k].Text = $labels[$k]
+            $items[$k].Checked=$true
             $items[$k].ForeColor = $ModeColors[$k]
         } else {
             $items[$k].Font = $NormalFont
-            $items[$k].Text = "    $($labels[$k])"
+            $items[$k].Text = $labels[$k]
+            $items[$k].Checked=$false
             $items[$k].ForeColor = [System.Drawing.SystemColors]::ControlText
         }
     }
@@ -1057,8 +1078,9 @@ function Update-TrayIcon {
 
 # === 菜单点击 (全部 fire-and-forget, 不卡) ====================================
 $menuAuto.Add_Click({
-    Set-AutoEnabled $true
-    Invoke-Worker -Mode 'Auto'
+    $enable=-not (Get-AutoEnabled)
+    Set-AutoEnabled $enable
+    if($enable){Invoke-Worker -Mode 'Auto'}
     Update-TrayIcon
 })
 $menuIdle.Add_Click({
@@ -1073,12 +1095,15 @@ $menuGame.Add_Click({
     Set-AutoEnabled $false
     Invoke-Worker -Mode 'Game'
 })
-$menuSettings.Add_Click({ Show-Settings })
+$menuSettings.Add_Click({ Show-ModernSettings })
+$menuMonitor.Add_Click({ Show-ModernDashboard })
+$menuLegacy.Add_Click({ Start-TrayVersionSwitch $ScriptDir 'Legacy' })
 $menuLog.Add_Click({
     $logPath = Join-Path $ScriptDir 'profile.log'
     if (Test-Path $logPath) { Start-Process notepad.exe $logPath }
 })
 $menuExit.Add_Click({
+    if($Script:Dashboard -and -not $Script:Dashboard.IsDisposed){$Script:Dashboard.Close()}
     Close-Toast
     $notify.Visible = $false
     [System.Windows.Forms.Application]::Exit()
@@ -1088,15 +1113,7 @@ $menuExit.Add_Click({
 $notify.Add_MouseClick({
     param($s, $e)
     if ($e.Button -eq 'Left') {
-        $newState = -not (Get-AutoEnabled)
-        Set-AutoEnabled $newState
-        if ($newState) {
-            Invoke-Worker -Mode 'Auto'
-            Show-ModeToast -Mode (Get-CurrentMode) -SubText '自动检测 开启'
-        } else {
-            Show-ModeToast -Mode (Get-CurrentMode) -SubText '自动检测 关闭 (手动锁定)'
-        }
-        Update-TrayIcon
+        Show-ModernDashboard
     }
 })
 
@@ -1154,6 +1171,9 @@ $Script:AutoTimer.Add_Tick({
     $quietGuard = Invoke-GameIdleQuietGuard -ActivityIdleSec $activityIdleSec -EffectiveIdleSec $idleSec
     $unlockSec = [int]$Script:Settings.manualUnlockMinutes * 60
     try {
+        if ((Test-Path $dbg) -and (Get-Item $dbg).Length -gt 2MB) {
+            Move-Item -LiteralPath $dbg -Destination "$dbg.1" -Force
+        }
         $line = "{0}  auto={1}  idle={2}s  inputIdle={3}s  threshold={4}s  quietGuard={5}  willUnlock={6}" -f `
             (Get-Date -Format 'HH:mm:ss'), $auto, $idleSec, $activityIdleSec, $unlockSec, $quietGuard, `
             ((-not $auto) -and ($idleSec -ge $unlockSec))
@@ -1194,5 +1214,8 @@ $Script:AutoTimer.Start()
 Remove-Item $LegacyIdleQuietStatePath -ErrorAction SilentlyContinue
 if (Get-AutoEnabled) { Invoke-Worker -Mode 'Auto' -ActivityIdleSec (Get-UserActivityIdleSeconds) }
 Update-TrayIcon
+
+Write-AtomicJson (Join-Path $ScriptDir 'tray_ready.json') @{processId=$PID;version='Modern';observedAt=[DateTime]::UtcNow.ToString('o')}
+Write-LifecycleLog '[READY] Modern tray UI initialized'
 
 [System.Windows.Forms.Application]::Run()

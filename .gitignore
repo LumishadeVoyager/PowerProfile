@@ -4,6 +4,15 @@ auto_enabled.txt
 game_miss_count.txt
 idle_quiet_state.json
 game_detection_state.json
+game_session_state.json
+*.json.*.tmp
+*.log.1
+worker_error.log
 boot_guard_*.txt
 settings.json
 .codex/
+tray_version.txt
+tray_ready.json
+system_status.json
+switch_result.json
+tray_switch_request.txt

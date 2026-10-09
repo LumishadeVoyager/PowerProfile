@@ -1,0 +1,61 @@
+﻿$ErrorActionPreference='Stop'
+$project=Split-Path -Parent $PSScriptRoot
+. (Join-Path $project 'PowerProfileVersion.ps1')
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+function Assert-Equal($Name,$Actual,$Expected){if($Actual -ne $Expected){throw "$Name expected $Expected got $Actual"};Write-Host "PASS $Name"}
+$testRoot=Join-Path ([IO.Path]::GetTempPath()) ('PowerProfileUITests-'+[Guid]::NewGuid())
+[void](New-Item -ItemType Directory $testRoot)
+try {
+    Assert-Equal 'new installs select modern' (Get-SelectedTrayVersion $testRoot) 'Modern'
+    'Legacy' | Set-Content (Join-Path $testRoot 'tray_version.txt')
+    Assert-Equal 'legacy selection survives restart' (Get-SelectedTrayVersion $testRoot) 'Legacy'
+    'corrupt' | Set-Content (Join-Path $testRoot 'tray_version.txt')
+    Assert-Equal 'invalid selector fails to known version' (Get-SelectedTrayVersion $testRoot) 'Modern'
+    Assert-Equal 'legacy path is independent' (Get-TrayVersionPath $project Legacy) (Join-Path $project 'legacy\PowerProfileTray.ps1')
+    foreach($file in @('PowerProfile.ps1','PowerProfileLogic.ps1','PowerProfileDetection.ps1')) {
+        Assert-Equal "legacy core preserved: $file" (Get-FileHash (Join-Path $project $file)).Hash (Get-FileHash (Join-Path $project ('legacy\'+$file))).Hash
+    }
+    $ScriptDir=$project;$SettingsPath=Join-Path $testRoot 'settings.json'
+    Copy-Item (Join-Path $project 'settings.example.json') $SettingsPath
+    $Script:Settings=@{modes=@{Idle=@{name='静音';freqMax=1800};Balanced=@{name='均衡';freqMax=3500};Game=@{name='游戏';freqMax=4500}}}
+    function Get-CurrentMode{return 'Idle'}
+    function Get-AutoEnabled{return $true}
+    function Read-GameDetectionState{return @{Fresh=$true;Reason='fixture game detection'}}
+    function Get-UserActivityIdleSeconds{return 90}
+    function Format-Freq($MHz){return "$MHz MHz"}
+    . (Join-Path $project 'PowerProfileModernUI.ps1')
+    # Stub only data sampling; all native controls and window lifetime are real.
+    function Invoke-TelemetrySample{}
+    foreach($mode in @('Idle','Balanced','Game')) {
+        $icon=[ProfileVisual]::CreateIcon($mode)
+        Assert-Equal "native icon created $mode" ($icon.Width -gt 0) $true
+        $icon.Dispose()
+    }
+    Show-ModernDashboard
+    Assert-Equal 'dashboard displays actual mode source' $Script:Dashboard.Tag.Fields.mode.Text '静音 · 自动'
+    Assert-Equal 'dashboard displays detection reason' $Script:Dashboard.Tag.Fields.reason.Text 'fixture game detection'
+    $timer=$Script:Dashboard.Tag.Timer
+    $form=$Script:Dashboard
+    $form.Close();[Windows.Forms.Application]::DoEvents()
+    Assert-Equal 'closing dashboard stops refresh timer' $timer.Enabled $false
+    Assert-Equal 'closing dashboard releases form reference' ($null -eq $Script:Dashboard) $true
+    Assert-Equal 'UI loading leaves settings unchanged' (Get-FileHash $SettingsPath).Hash (Get-FileHash (Join-Path $project 'settings.example.json')).Hash
+    . (Join-Path $project 'PowerProfileDetection.ps1')
+    $before=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $settingsForm=Show-ModernSettings -ReturnForm
+    $settingsForm.Show();[Windows.Forms.Application]::DoEvents()
+    $saveButton=@($settingsForm.Controls | Where-Object { $_ -is [Windows.Forms.Button] -and $_.Text -eq '保存' })[0]
+    $saveButton.PerformClick()
+    $after=Get-Content $SettingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach($mode in @('Idle','Balanced','Game')) {
+        Assert-Equal "modern UI save preserves CPU $mode" ($after.modes.$mode | ConvertTo-Json -Compress) ($before.modes.$mode | ConvertTo-Json -Compress)
+    }
+    Assert-Equal 'modern UI save changes only UI option' $after.ui.toastEnabled $true
+    if($settingsForm.Icon){$settingsForm.Icon.Dispose()};$settingsForm.Dispose()
+} finally {
+    $resolved=[IO.Path]::GetFullPath($testRoot)
+    $prefix=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\PowerProfileUITests-'
+    if(-not $resolved.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Unexpected cleanup target'}
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}
+Write-Host 'All UI/version regression tests passed.'

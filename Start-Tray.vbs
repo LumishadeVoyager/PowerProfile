@@ -2,4 +2,4 @@
 Set objShell = CreateObject("WScript.Shell")
 Set objFSO = CreateObject("Scripting.FileSystemObject")
 strPath = objFSO.GetParentFolderName(WScript.ScriptFullName)
-objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & strPath & "\PowerProfileTray.ps1""", 0, False
+objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & strPath & "\Start-PowerProfile.ps1""", 0, False

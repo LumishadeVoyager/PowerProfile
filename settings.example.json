@@ -1,31 +1,40 @@
 {
   "modes": {
     "Idle": {
-      "freqMax": 2000,
+      "freqMax": 1800,
       "name": "静音",
       "min": 50,
       "max": 100,
       "boost": 0
     },
     "Balanced": {
-      "freqMax": 3000,
+      "freqMax": 3500,
       "name": "均衡",
       "min": 60,
       "max": 99,
       "boost": 1
     },
     "Game": {
-      "freqMax": 0,
+      "freqMax": 4500,
       "name": "游戏",
       "min": 90,
       "max": 100,
       "boost": 2
     }
   },
-  "autoIntervalSec": 15,
+  "autoIntervalSec": 20,
   "userIdleSec": 90,
   "toastStaySec": 1.2,
-  "manualUnlockMinutes": 20,
+  "manualUnlockMinutes": 10,
   "gameIdleQuietMinutes": 10,
-  "gameExitMissCount": 6
+  "gameExitMissCount": 6,
+  "processorBaseMHz": 0,
+  "detection": {
+    "discoverSteam": true,
+    "discoverEpic": true,
+    "backgroundGraceSec": 120,
+    "gameProcesses": [],
+    "excludeProcesses": [],
+    "gameRoots": []
+  }
 }
