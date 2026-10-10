@@ -57,6 +57,11 @@ try {
     Assert-Equal 'unconfigured energy never displays demo watts' $Script:Dashboard.Tag.Fields.watts.Text '-- W'
     Show-EnergyDetails
     Assert-Equal 'energy details visible' $Script:EnergyDetails.Visible $true
+    $cloudForm=Show-CloudHistory -ReturnForm
+    Assert-Equal 'cloud history opens without starting a background job' ($null -eq $cloudForm.Tag.Process) $true
+    Assert-Equal 'cloud import requires actual queried data' $cloudForm.Tag.Import.Enabled $false
+    foreach($control in $cloudForm.Controls){if($control.Right -gt $cloudForm.ClientSize.Width -or $control.Bottom -gt $cloudForm.ClientSize.Height){throw 'Cloud history control outside window'}}
+    $cloudForm.Tag.Timer.Dispose();$cloudForm.Dispose()
     Assert-Equal 'unconfigured switch is disabled' $Script:EnergyDetails.Tag.Fields.switch.Enabled $false
     Assert-Equal 'unconfigured chart has no fake data points' $Script:EnergyDetails.Tag.Chart.Points.Count 0
     Assert-Equal 'daily table defaults to thirty dates' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 30

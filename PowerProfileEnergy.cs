@@ -84,7 +84,8 @@ public sealed class ProfilePlugTransport {
 }
 
 public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} }
-public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} }
+public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} }
+public sealed class ProfileCloudHistory {public uint DeviceId {get;set;} public string Model {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} public string Query {get;set;} public double Multiplier {get;set;} public string FetchedAt {get;set;} }
 public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
 public sealed class ProfileEnergySnapshot {
@@ -96,7 +97,7 @@ public sealed class ProfileEnergySnapshot {
 }
 public sealed class ProfileEnergyService : IDisposable {
     readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;
-    ProfileEnergyConfig config;ProfileEnergyHistory history;ProfileEnergySnapshot snapshot=new ProfileEnergySnapshot();
+    ProfileEnergyConfig config;ProfileEnergyHistory history;ProfileCloudHistory cloud;ProfileEnergySnapshot snapshot=new ProfileEnergySnapshot();
     readonly Queue<string[]> events=new Queue<string[]>();
     static readonly byte[] entropy=Encoding.UTF8.GetBytes("PowerProfile.cuco.plug.v3.v1");
     public ProfileEnergyService(string root):this(root,true){}
@@ -107,6 +108,8 @@ public sealed class ProfileEnergyService : IDisposable {
         try{var loaded=json.Deserialize<ProfileEnergyHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.history.json")));if(loaded.Points!=null && loaded.Days!=null && loaded.Device==config.Address)history=loaded;}
         catch(FileNotFoundException){}catch{Event("energy.history.failed","历史记录无法读取；本次重新累计","WARN");snapshot.Status="历史记录损坏 · 重新累计";}
         snapshot.Configured=!String.IsNullOrWhiteSpace(config.Address) && !String.IsNullOrWhiteSpace(config.Secret);snapshot.Price=config.Price;
+        try{cloud=Serializer().Deserialize<ProfileCloudHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.cloud.history.json")));ValidateCloud(cloud);}
+        catch(FileNotFoundException){}catch{cloud=null;Event("energy.cloud.cache.failed","米家历史缓存无法读取；保留本机估算","WARN");}
         timer=new System.Threading.Timer(_=>Refresh(),null,Timeout.Infinite,Timeout.Infinite);if(snapshot.Configured && autoPoll)timer.Change(0,60000);
     }
     static JavaScriptSerializer Serializer(){return new JavaScriptSerializer{MaxJsonLength=4*1024*1024};}
@@ -136,15 +139,33 @@ public sealed class ProfileEnergyService : IDisposable {
         config=next;snapshot=new ProfileEnergySnapshot{Configured=!String.IsNullOrWhiteSpace(address),Price=price,Status=String.IsNullOrWhiteSpace(address)?"未连接 · 请设置插座":"等待连接"};
         timer.Change(snapshot.Configured && autoPoll?0:Timeout.Infinite,snapshot.Configured && autoPoll?60000:Timeout.Infinite);Event("energy.config.saved","已保存插座配置与固定电价；凭据使用 Windows 当前用户加密","INFO");}}
     public ProfileEnergySnapshot GetSnapshot(){lock(gate){
-        var r=Summarize(history,config.Price,DateTime.UtcNow);
+        var merged=new ProfileEnergyHistory{Days=new Dictionary<string,ProfileEnergyDay>(history.Days)};
+        string today=China(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        if(cloud!=null && cloud.DeviceId==config.DeviceId && config.DeviceId!=0)foreach(var item in cloud.Days)if(String.CompareOrdinal(item.Key,today)<0)merged.Days[item.Key]=item.Value;
+        var r=Summarize(merged,config.Price,DateTime.UtcNow);
         r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);
         return r;}}
+    static void ValidateCloud(ProfileCloudHistory value){
+        if(value==null || value.DeviceId==0 || value.Model!="cuco.plug.v3" || value.Days==null || value.Days.Count==0 || value.Days.Count>400)throw new InvalidDataException("历史设备或日期数量无效。");
+        foreach(var item in value.Days){DateTime date;var day=item.Value;
+            if(!DateTime.TryParseExact(item.Key,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date) || date>=China(DateTime.UtcNow).Date || day==null || Double.IsNaN(day.KWh) || Double.IsInfinity(day.KWh) || day.KWh<0 || day.KWh>88.32 || day.Source!="MiHome" || day.Seconds!=0)throw new InvalidDataException("历史日期、单位或电量无效；不会覆盖现有数据。");
+        }
+    }
+    public int ImportCloudHistory(string json){lock(gate){
+        var next=Serializer().Deserialize<ProfileCloudHistory>(json);ValidateCloud(next);
+        if(config.DeviceId==0 || next.DeviceId!=config.DeviceId)throw new InvalidDataException("历史记录不属于当前已验证的插座。");
+        int count=next.Days.Count;
+        if(cloud!=null && cloud.DeviceId==next.DeviceId)foreach(var item in cloud.Days)if(!next.Days.ContainsKey(item.Key))next.Days[item.Key]=item.Value;
+        string oldest=China(DateTime.UtcNow).AddDays(-400).ToString("yyyy-MM-dd");var remove=new List<string>();foreach(var key in next.Days.Keys)if(String.CompareOrdinal(key,oldest)<0)remove.Add(key);foreach(var key in remove)next.Days.Remove(key);
+        ValidateCloud(next);ProfileEnergyStore.Write(Path.Combine(root,"energy.cloud.history.json"),Serializer().Serialize(next));cloud=next;
+        Event("energy.cloud.imported","已导入米家完整日统计；同一天优先采用米家历史，不重复计费","INFO");return count;
+    }}
     public static ProfileEnergySnapshot Summarize(ProfileEnergyHistory h,decimal? price,DateTime utcNow){
         DateTime today=China(utcNow).Date,week=today.AddDays(-(((int)today.DayOfWeek+6)%7)),month=new DateTime(today.Year,today.Month,1);
         var r=new ProfileEnergySnapshot{Price=price,LocalDay=today.ToString("yyyy-MM-dd"),WeekStart=week.ToString("yyyy-MM-dd"),MonthStart=month.ToString("yyyy-MM-dd")};
         foreach(var item in h.Days){DateTime date;var value=item.Value;
             if(!DateTime.TryParseExact(item.Key,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date) || date>today || value==null || Double.IsNaN(value.KWh) || Double.IsInfinity(value.KWh) || value.KWh<0 || Double.IsNaN(value.Seconds) || Double.IsInfinity(value.Seconds) || value.Seconds<0)continue;
-            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds};
+            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source};
             if(date==today){r.TodayKWh=value.KWh;r.TodaySeconds=value.Seconds;}
             if(date>=week){r.WeekKWh=(r.WeekKWh??0)+value.KWh;r.WeekSeconds+=value.Seconds;}
             if(date>=month){r.MonthKWh=(r.MonthKWh??0)+value.KWh;r.MonthSeconds+=value.Seconds;}

@@ -77,6 +77,28 @@ try {
     $result=$parser.DeserializeObject($props)
     Assert 'property errors never masquerade as power readings' ($null -eq [ProfilePlugTransport]::ReadValue($result,11,2))
     Assert 'valid off state remains a boolean' ([ProfilePlugTransport]::ReadValue($result,2,1) -eq $false)
+    $Script:EnergyService.Dispose()
+    $settingsFile=Join-Path $ScriptDir 'energy.settings.json'
+    $settings=Get-Content $settingsFile -Raw | ConvertFrom-Json
+    $settings | Add-Member DeviceId ([uint32]12345) -Force
+    [IO.File]::WriteAllText($settingsFile,($settings|ConvertTo-Json))
+    $day=[TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow,'China Standard Time').Date.AddDays(-1).ToString('yyyy-MM-dd')
+    $local=@{Device='192.168.1.254';Points=@();Days=@{}}
+    $local.Days[$day]=@{KWh=2;Seconds=3600}
+    [IO.File]::WriteAllText((Join-Path $ScriptDir 'energy.history.json'),($local|ConvertTo-Json -Depth 5))
+    $Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
+    $cloud=@{DeviceId=12345;Model='cuco.plug.v3';Days=@{};Multiplier=0.01;Query='11.1:stat_day'}
+    $cloud.Days[$day]=@{KWh=1.5;Seconds=0;Source='MiHome'}
+    [void]$Script:EnergyService.ImportCloudHistory(($cloud|ConvertTo-Json -Depth 5))
+    Assert 'cloud complete day replaces local estimate without double counting' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
+    Assert 'cloud provenance survives reporting' ($Script:EnergyService.GetSnapshot().Days[$day].Source -eq 'MiHome')
+    Assert 'original local integration remains available' ((Get-Content (Join-Path $ScriptDir 'energy.history.json') -Raw|ConvertFrom-Json).Days.$day.KWh -eq 2)
+    [void]$Script:EnergyService.ImportCloudHistory(($cloud|ConvertTo-Json -Depth 5))
+    Assert 'repeated imports remain idempotent' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
+    $cloud.DeviceId=999;$rejected=$false;try{[void]$Script:EnergyService.ImportCloudHistory(($cloud|ConvertTo-Json -Depth 5))}catch{$rejected=$true}
+    Assert 'another plug history is rejected without altering totals' ($rejected -and $Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
+    $Script:EnergyService.Dispose();$Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
+    Assert 'cloud history persists across restart' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
     $Script:EnergyService.Configure('','',[decimal]0.7)
     Assert 'disconnect clears device readings and stored credentials' (-not $Script:EnergyService.GetSnapshot().Configured -and $null -eq $Script:EnergyService.GetSnapshot().Watts -and -not ([IO.File]::ReadAllText((Join-Path $ScriptDir 'energy.settings.json')) | ConvertFrom-Json).Secret)
 } finally {

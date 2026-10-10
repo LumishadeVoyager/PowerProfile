@@ -21,4 +21,6 @@ tray_ui_request.txt
 logs/
 energy.settings.json
 energy.history.json
+energy.cloud.history.json
 auto_load_state.json
+__pycache__/

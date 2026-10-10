@@ -12,6 +12,20 @@ Token 使用 Windows DPAPI 当前用户加密，保存于忽略 Git 的 `energy.
 
 ## 计费口径
 
+## 米家历史补录
+
+“用电详情 → 米家历史”可扫码授权小米账号，手动查询最多近一年云端日统计。此可选组件使用 `mijiaAPI==5.0.0`，首次安装运行 `Install-EnergyHistory.ps1`（需要 Python 3.10+）；依赖只在手动登录/查询时启动，托盘不加载 Python，不增加云端后台轮询。关闭查询窗口会停止该窗口启动的查询进程。
+
+登录只连接小米账号和 `api.io.mi.com`，不使用库的替代 API 域名。会话凭据使用 Windows 当前用户 DPAPI 加密，保存在忽略 Git 的 `.codex/energy-cloud-auth.bin`。二维码不要求在聊天中提供密码。
+
+不同固件可能使用不同统计格式；查询结果会列出候选源、原始值换算选项及日期预览。插座 3 常见换算为原始值 × 0.01 kWh，导入前必须和米家同一天数据核对。接口无结果、授权失效或格式不支持时，不填补数据。查询的可用跨度以小米实际保留和接口分页限制为准，不能保证完整一年。
+
+只导入已结束的北京时间日期。云端完整日统计按同日替代本机片段估算，绝不两份相加；今日继续本机累计，功率曲线保持原样。日/周/月显示统一按当前固定电价计算，来源列显示“米家历史”或“历史 + 估算”。历史缓存独立保存为 `energy.cloud.history.json`，保留约 400 天；原 `energy.history.json` 不覆盖，重复导入不重复累计，并核验当前插座设备 ID。
+
+协议依据：[小米官方累计电量异常说明](https://github.com/XiaoMi/ha_xiaomi_home/wiki/Wrong-power-consumption)、[小米统计接口文档](https://miecosystem.github.io/miot-plugin-sdk/module-miot_service_smarthome.html)、[mijiaAPI 登录与统计实现](https://github.com/Do1e/mijia-api)、[插座 3 单位配置](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/core/device_customizes.py)。依赖为独立安装的第三方 GPL-3.0 包，仓库不复制其代码。实机历史只有登录完成、返回数据并核对单位后才视为验证成功。
+
+## 本机估算与电费
+
 - 固定电价由用户设置，本机初始设为用户确认的 **0.7 元/度**。仓库不硬编码地区电价。
 - 功率对应适配器交流输入，包含电脑耗电、适配器损耗和电池充电。
 - 用电量用两次有效功率的梯形积分计算；默认每 60 秒采样。首次读数不追溯累计，超过 120 秒或发生失败的间隔不计入电量。午夜按中国时区拆分每日记录。

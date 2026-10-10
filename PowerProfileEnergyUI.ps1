@@ -1,6 +1,7 @@
 ﻿# Energy monitoring is separate from settings.json and the power-control workers.
 $Script:EnergyService=$null
 $Script:EnergyDetails=$null
+. (Join-Path $PSScriptRoot 'PowerProfileCloudHistoryUI.ps1')
 function Initialize-EnergyService {
     if($Script:EnergyService){return}
     if(-not ('ProfileEnergyService' -as [type])){
@@ -87,7 +88,8 @@ function Update-EnergyDetails {
     $Script:DashboardTip.SetToolTip($f.month,"北京时间 $($state.MonthStart) 至 $($state.LocalDay)；自然月，已采集 $([Math]::Round($state.MonthSeconds/3600,1)) 小时。")
     $f.hint.Text=if($state.Configured){$state.Status}else{'尚未连接 · 点击“连接与电价”设置插座'}
     $Script:DashboardTip.SetToolTip($f.hint,$state.Status)
-    $f.coverage.Text='用电量、电费为已采集片段的估算；未采集日期与断线不补值'
+    $hasCloud=@($state.Days.Values | Where-Object {$_.Source -eq 'MiHome'}).Count -gt 0
+    $f.coverage.Text=if($hasCloud){'完整日期优先米家历史；其他日期为本机估算，缺失日期不补值'}else{'用电量、电费为已采集片段的估算；可通过米家历史补录'}
     $f.updated.Text=if($state.ObservedAt -ne [DateTime]::MinValue){"采样 $($state.ObservedAt.ToLocalTime().ToString('HH:mm:ss')) · 每分钟更新"}else{'连接后开始累计，无接入前历史数据'}
     $f.switch.Enabled=$fresh -and $null -ne $state.On -and -not $state.Busy
     $f.switch.Text=if($state.On -eq $false){'开启插座'}else{'关闭插座'};$f.refresh.Enabled=$state.Configured -and -not $state.Busy
@@ -109,8 +111,9 @@ function Update-EnergyDailyRows {
         $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
         $start=switch($view){'Week'{$date.AddDays(-(([int]$date.DayOfWeek+6)%7))};'Month'{$date.AddDays(1-$date.Day)};default{$date}}
         $groupKey=$start.ToString('yyyy-MM-dd')
-        if(-not $totals.ContainsKey($groupKey)){$totals[$groupKey]=@{KWh=0.0;Seconds=0.0}}
+        if(-not $totals.ContainsKey($groupKey)){$totals[$groupKey]=@{KWh=0.0;Seconds=0.0;CloudDays=0;LocalDays=0}}
         $totals[$groupKey].KWh+=$item.Value.KWh;$totals[$groupKey].Seconds+=$item.Value.Seconds
+        if($item.Value.Source -eq 'MiHome'){$totals[$groupKey].CloudDays++}else{$totals[$groupKey].LocalDays++}
     }
     $grid.Columns[0].HeaderText=switch($view){'Week'{'周起始（周一）'};'Month'{'月份'};default{'日期'}}
     for($i=0;$i -lt $count;$i++){
@@ -119,7 +122,7 @@ function Update-EnergyDailyRows {
         $entry=if($totals.ContainsKey($groupKey)){$totals[$groupKey]}else{$null}
         $amount=if($null -ne $entry){Format-EnergyAmount $entry.KWh 'kWh'}else{'未采集'}
         $cost=if($null -ne $entry){Format-EnergyCost $entry.KWh $State.Price}else{'—'}
-        $coverage=if($null -ne $entry){'{0:N1} 小时' -f ($entry.Seconds/3600)}else{'—'}
+        $coverage=if($null -eq $entry){'—'}elseif($entry.CloudDays -gt 0){if($entry.LocalDays -gt 0){'历史 + 估算'}else{'米家历史'}}else{'{0:N1} 小时' -f ($entry.Seconds/3600)}
         $index=$grid.Rows.Add([object[]]@($date,$amount,$cost,$coverage))
         $grid.Rows[$index].Cells[0].ToolTipText=if($view -eq 'Week'){"$groupKey 至 $($start.AddDays(6).ToString('yyyy-MM-dd'))（北京时间）；本周期截至今日"}elseif($view -eq 'Month'){"自然月 $date；本周期截至今日"}else{'北京时间日期'}
         if($null -eq $entry){$grid.Rows[$index].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(133,142,150)}
@@ -174,7 +177,8 @@ function Show-EnergyDetails {
     $setup=New-EnergyButton '连接与电价' 18 770 136;$form.Controls.Add($setup);$setup.Add_Click({Show-EnergyConnection;Update-EnergyDetails})
     $fields.refresh=New-EnergyButton '刷新' 164 770 92;$form.Controls.Add($fields.refresh);$fields.refresh.Add_Click({$Script:EnergyService.Refresh();Update-EnergyDetails})
     $fields.coverage=New-ModernLabel '' 18 720 524;$fields.coverage.Height=20;$fields.coverage.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$fields.coverage.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.coverage)
-    $fields.updated=New-ModernLabel '' 18 743 524;$fields.updated.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$form.Controls.Add($fields.updated)
+    $fields.updated=New-ModernLabel '' 18 743 250;$fields.updated.Height=20;$fields.updated.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$form.Controls.Add($fields.updated)
+    $cloudButton=New-EnergyButton '米家历史…' 284 742 124;$cloudButton.Height=26;$form.Controls.Add($cloudButton);$cloudButton.Add_Click({Show-CloudHistory;Update-EnergyDetails})
     $fields.hint=New-ModernLabel '' 288 65 252;$fields.hint.Height=20;$fields.hint.AutoEllipsis=$true;$fields.hint.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.hint)
     $close=New-EnergyButton '关闭' 430 770 112;$form.Controls.Add($close);$close.Add_Click({$Script:EnergyDetails.Close()})
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=1000;$timer.Add_Tick({try{Update-EnergyDetails}catch{Write-ProfileEvent 'ui.energy.refresh.failed' $_.Exception.Message 'ERROR'}})
