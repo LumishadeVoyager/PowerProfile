@@ -7,6 +7,7 @@ import math
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -100,26 +101,36 @@ def normalize(rows, multiplier, now=None):
 
 def run(args):
     import msvcrt
-    lock = open(PRIVATE / 'energy-cloud.lock', 'a+b')
-    lock.seek(0)
-    if lock.read(1) == b'':
-        lock.write(b'0')
-        lock.flush()
-    lock.seek(0)
-    try:
-        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError:
-        return  # another login/query owns the status; do not overwrite it
+    with open(PRIVATE / 'energy-cloud.lock', 'a+b') as lock:
+        lock.seek(0)
+        if lock.read(1) == b'':
+            lock.write(b'0')
+            lock.flush()
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return  # another login/query owns the status; do not overwrite it
+        return run_locked(args)
+
+
+def run_locked(args):
     api = client()
     if args.action == 'login':
         status('connecting', '正在申请小米登录二维码…')
         data = api._get_qr_login_data()
         if not data.get('refreshed'):
             import qrcode
-            image = PRIVATE / 'energy-cloud-login.png'
+            image = PRIVATE / ('energy-cloud-login-' + uuid.uuid4().hex + '.png')
             qrcode.make(data['loginUrl']).save(image)
             status('scan', '请用米家 App 扫码并确认登录；二维码约两分钟有效', image=str(image))
-            api._complete_qr_login(data)
+            try:
+                api._complete_qr_login(data)
+            finally:
+                try:
+                    image.unlink(missing_ok=True)
+                except OSError:
+                    pass
         status('authorized', '小米登录成功，可以查询历史用电。')
         return
     if not api.auth_data:
@@ -172,4 +183,9 @@ if __name__ == '__main__':
         run(args)
     except Exception as exc:
         # Exceptions from cloud libraries can contain credentials or raw responses.
-        status('error', '查询或登录失败，请重试；可能是网络、授权过期或接口不兼容。', error_type=type(exc).__name__)
+        message = '查询或登录失败，请重试；可能是网络、授权过期或接口不兼容。'
+        if args.action == 'login' and type(exc).__name__ == 'LoginError':
+            message = '扫码登录未完成或二维码已过期，请点击“扫码登录”重新申请。'
+        elif isinstance(exc, PermissionError):
+            message = '无法更新本机登录文件；文件可能被占用，请重新打开历史窗口后再试。'
+        status('error', message, error_type=type(exc).__name__)

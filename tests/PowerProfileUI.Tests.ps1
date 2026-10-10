@@ -60,6 +60,21 @@ try {
     $cloudForm=Show-CloudHistory -ReturnForm
     Assert-Equal 'cloud history opens without starting a background job' ($null -eq $cloudForm.Tag.Process) $true
     Assert-Equal 'cloud import requires actual queried data' $cloudForm.Tag.Import.Enabled $false
+    $qrPath=Join-Path $testRoot 'qr.png';$statusPath=Join-Path $testRoot 'qr-status.json'
+    $bitmap=New-Object Drawing.Bitmap 20,20;$bitmap.Save($qrPath,[Drawing.Imaging.ImageFormat]::Png);$bitmap.Dispose()
+    @{phase='scan';message='scan fixture';image=$qrPath}|ConvertTo-Json|Set-Content $statusPath -Encoding UTF8
+    Update-CloudHistoryStatus $cloudForm $statusPath
+    Assert-Equal 'QR displayed from status' ($null -ne $cloudForm.Tag.Picture.Image) $true
+    $writer=[IO.File]::Open($qrPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$writer.Dispose()
+    Assert-Equal 'displayed QR releases source file for refresh' $true $true
+    $cloudForm.Tag.LastStatus=''
+    $held=[IO.File]::Open($qrPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    try{Update-CloudHistoryStatus $cloudForm $statusPath;Assert-Equal 'failed image read remains retryable' $cloudForm.Tag.LastStatus ''}finally{$held.Dispose()}
+    Update-CloudHistoryStatus $cloudForm $statusPath
+    Assert-Equal 'transient image lock recovers on next update' ($cloudForm.Tag.LastStatus -ne '') $true
+    @{phase='error';message='二维码已过期，请重新申请'}|ConvertTo-Json|Set-Content $statusPath -Encoding UTF8
+    Update-CloudHistoryStatus $cloudForm $statusPath
+    Assert-Equal 'expired QR is removed with readable status' ($null -eq $cloudForm.Tag.Picture.Image -and $cloudForm.Tag.Status.Text -like '*过期*') $true
     foreach($control in $cloudForm.Controls){if($control.Right -gt $cloudForm.ClientSize.Width -or $control.Bottom -gt $cloudForm.ClientSize.Height){throw 'Cloud history control outside window'}}
     $cloudForm.Tag.Timer.Dispose();$cloudForm.Dispose()
     Assert-Equal 'unconfigured switch is disabled' $Script:EnergyDetails.Tag.Fields.switch.Enabled $false

@@ -1,12 +1,44 @@
 ﻿function Start-CloudHistoryJob {
     param($Form,[string]$Action)
     $tag=$Form.Tag
-    if($tag.Process -and -not $tag.Process.HasExited){return}
+    if($tag.Process -and -not $tag.Process.HasExited){
+        if($Action -ne 'login'){$tag.Status.Text='正在等待扫码，请完成授权后再查询。';return}
+        $tag.Process.Kill();[void]$tag.Process.WaitForExit(3000)
+    }
     $python=Join-Path $ScriptDir '.codex\energy-cloud\Scripts\pythonw.exe'
     if(-not (Test-Path $python)){throw '历史查询组件尚未安装，请运行 Install-EnergyHistory.ps1。'}
     Remove-Item -LiteralPath (Join-Path $ScriptDir '.codex\energy-cloud-status.json') -ErrorAction SilentlyContinue
+    if($tag.Picture.Image){$tag.Picture.Image.Dispose();$tag.Picture.Image=$null}
     $tag.LastStatus='';$tag.Status.Text='正在连接小米…'
     $tag.Process=Start-Process $python -WindowStyle Hidden -PassThru -ArgumentList @(('"{0}"' -f (Join-Path $ScriptDir 'PowerProfileCloudHistory.py')),$Action)
+}
+function Update-CloudHistoryStatus {
+    param($Form,[string]$StatusPath=(Join-Path $ScriptDir '.codex\energy-cloud-status.json'))
+    $t=$Form.Tag
+    if(-not(Test-Path $StatusPath)){return}
+    try {
+        $content=[IO.File]::ReadAllText($StatusPath)
+        if($content -eq $t.LastStatus){return}
+        $s=$content|ConvertFrom-Json
+        if($s.phase -eq 'scan'){
+            # Image.Clone retains GDI+'s backing-file lock. Copy pixels instead.
+            $loaded=[Drawing.Image]::FromFile($s.image)
+            try{$detached=New-Object Drawing.Bitmap $loaded}finally{$loaded.Dispose()}
+            if($t.Picture.Image){$t.Picture.Image.Dispose()}
+            $t.Picture.Image=$detached
+        } else {
+            if($t.Picture.Image){$t.Picture.Image.Dispose();$t.Picture.Image=$null}
+        }
+        if($s.phase -eq 'fetched'){
+            $t.Raw=Get-Content (Join-Path $ScriptDir '.codex\energy-cloud-raw.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            $t.Sources.Items.Clear()
+            foreach($c in $t.Raw.candidates){[void]$t.Sources.Items.Add([PSCustomObject]@{Label="$($c.key) / $($c.data_type) · $(@($c.rows).Count) 条";Data=$c})}
+            $t.Sources.SelectedIndex=0;$t.Import.Enabled=$true
+        }
+        $t.Status.Text=$s.message
+        # Mark consumed only after successful loading, so transient IO is retried.
+        $t.LastStatus=$content
+    } catch {$t.Status.Text='二维码或查询结果暂时无法读取，正在重试；也可点击扫码登录重新申请。'}
 }
 function Import-CloudHistorySelection {
     param($Form)
@@ -51,7 +83,7 @@ function Show-CloudHistory {
     $previewHandler={param($sender,$e) $t=$sender.FindForm().Tag;if($t.Sources.SelectedItem){$c=$t.Sources.SelectedItem.Data;$rows=@($c.rows | Sort-Object time -Descending | Select-Object -First 3);$lines=@();foreach($row in $rows){$date=[DateTimeOffset]::FromUnixTimeSeconds([long]$row.time).ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-dd');$v=if($row.value -is [string]){ConvertFrom-Json $row.value}else{$row.value};if(@($v).Count -eq 1){$lines+="${date}：$([Math]::Round([double]@($v)[0]*[double]$t.Units.SelectedItem.Value,3)) 度"}};$t.Preview.Text=$lines -join "`r`n"}}
     $sources.Add_SelectedIndexChanged($previewHandler);$units.Add_SelectedIndexChanged($previewHandler)
     $timer.Tag=$form
-    $timer.Add_Tick({param($sender,$e) $t=$sender.Tag.Tag;$path=Join-Path $ScriptDir '.codex\energy-cloud-status.json';if(-not(Test-Path $path)){return};try{$content=[IO.File]::ReadAllText($path);if($content -eq $t.LastStatus){return};$t.LastStatus=$content;$s=$content|ConvertFrom-Json;$t.Status.Text=$s.message;if($s.phase -eq 'scan'){$loaded=[Drawing.Image]::FromFile($s.image);if($t.Picture.Image){$t.Picture.Image.Dispose()};$t.Picture.Image=$loaded.Clone();$loaded.Dispose()};if($s.phase -eq 'fetched'){$t.Raw=Get-Content (Join-Path $ScriptDir '.codex\energy-cloud-raw.json') -Raw -Encoding UTF8 | ConvertFrom-Json;$t.Sources.Items.Clear();foreach($c in $t.Raw.candidates){[void]$t.Sources.Items.Add([PSCustomObject]@{Label="$($c.key) / $($c.data_type) · $(@($c.rows).Count) 条";Data=$c})};$t.Sources.SelectedIndex=0;$t.Import.Enabled=$true}}catch{$t.Status.Text='读取查询结果失败，请重试。'}})
+    $timer.Add_Tick({param($sender,$e) Update-CloudHistoryStatus $sender.Tag})
     $close.Add_Click({param($sender,$e) $sender.FindForm().Close()})
     $form.Add_FormClosed({param($sender,$e) $t=$sender.Tag;$t.Timer.Stop();$t.Timer.Dispose();if($t.Process -and -not $t.Process.HasExited){$t.Process.Kill()};if($t.Picture.Image){$t.Picture.Image.Dispose()};if($sender.Icon){$sender.Icon.Dispose()}})
     if($ReturnForm){return $form}
