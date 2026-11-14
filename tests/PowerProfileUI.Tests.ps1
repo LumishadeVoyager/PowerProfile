@@ -149,6 +149,11 @@ try {
     $Script:EnergyDetails.Tag.DailyGrid.FirstDisplayedScrollingRowIndex=0
     $Script:EnergyDetails.Tag.DailyGrid.CurrentCell=$Script:EnergyDetails.Tag.DailyGrid.Rows[1].Cells[0]
     Assert-Equal 'selection changes record coverage explanation' ($Script:EnergyDetails.Tag.Fields.recordHint.Text -like '*不能反推*') $true
+    $logsOnly=New-Object ProfileEnergySnapshot;$logsOnly.LocalDay=$displayState.LocalDay;$logsOnly.WeekStart=$displayState.WeekStart;$logsOnly.MonthStart=$displayState.MonthStart;$logsOnly.UsageUpdatedAt=[DateTime]::UtcNow
+    $usageOnly=New-Object ProfileEnergyDay;$usageOnly.Seconds=7200;$usageOnly.GameSeconds=3600;$usageOnly.GameCoverageSeconds=7200;$usageOnly.UsageSource='日志估算';$logsOnly.UsageDays[$localDay]=$usageOnly
+    Update-EnergyDailyRows $logsOnly
+    Assert-Equal 'log-derived usage appears even when energy is unavailable' ($Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[1].Value -eq '未采集' -and $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[4].Value -eq '2 小时 00 分' -and $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[6].Value -eq '1 小时 00 分') $true
+    Update-EnergyDetails $displayState
     $Script:EnergyDetails.Tag.DailyGrid.CurrentCell=$Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[0]
     $Script:EnergyDetails.Tag.ChartMode.SelectedIndex=1
     Assert-Equal 'power view remains available alongside billing timeline' ($Script:EnergyDetails.Tag.Chart.Visible -and -not $Script:EnergyDetails.Tag.Timeline.Visible) $true

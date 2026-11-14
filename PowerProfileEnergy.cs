@@ -88,7 +88,7 @@ public sealed class ProfilePlugTransport {
 }
 
 public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} public bool? IsGame {get;set;} }
-public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} public double? GameSeconds {get;set;} public double GameCoverageSeconds {get;set;} }
+public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} public double? GameSeconds {get;set;} public double GameCoverageSeconds {get;set;} public string UsageSource {get;set;} }
 public sealed class ProfileCloudHistory {public uint DeviceId {get;set;} public string Model {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} public string Query {get;set;} public double Multiplier {get;set;} public string FetchedAt {get;set;} }
 public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
@@ -98,6 +98,7 @@ public sealed class ProfileEnergySnapshot {
     public double TodaySeconds,WeekSeconds,MonthSeconds;public string LocalDay,WeekStart,MonthStart;
     public Dictionary<string,ProfileEnergyDay> Days=new Dictionary<string,ProfileEnergyDay>();
     public Dictionary<string,ProfileEnergyDay> UsageDays=new Dictionary<string,ProfileEnergyDay>();
+    public DateTime UsageUpdatedAt;
     public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();
 }
 public sealed class ProfileEnergyService : IDisposable {
@@ -105,6 +106,7 @@ public sealed class ProfileEnergyService : IDisposable {
     readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;
     ProfileEnergyConfig config;ProfileEnergyHistory history;ProfileCloudHistory cloud;ProfileEnergySnapshot snapshot=new ProfileEnergySnapshot();
     readonly Queue<string[]> events=new Queue<string[]>();
+    readonly ProfileUsageLogReader usageLogs;ProfileUsageLogCache usageCache;System.Threading.Timer usageTimer;bool usageBusy,usageError;
     static readonly byte[] entropy=Encoding.UTF8.GetBytes("PowerProfile.cuco.plug.v3.v1");
     public ProfileEnergyService(string root):this(root,true){}
     public ProfileEnergyService(string root,bool autoPoll){this.root=root;this.autoPoll=autoPoll;var json=Serializer();
@@ -120,6 +122,13 @@ public sealed class ProfileEnergyService : IDisposable {
         catch(FileNotFoundException){}catch{cloud=null;Event("energy.cloud.cache.failed","米家历史缓存无法读取；保留本机估算","WARN");}
         timer=new System.Threading.Timer(_=>Refresh(),null,Timeout.Infinite,Timeout.Infinite);if(snapshot.Configured && autoPoll)timer.Change(0,60000);
         Microsoft.Win32.SystemEvents.PowerModeChanged+=PowerModeChanged;
+        usageLogs=new ProfileUsageLogReader(root);usageCache=usageLogs.Cache;
+        usageTimer=new System.Threading.Timer(_=>RefreshUsageLogs(),null,autoPoll?0:Timeout.Infinite,autoPoll?60000:Timeout.Infinite);
+    }
+    public void RefreshUsageLogs(){lock(gate){if(disposed || usageBusy)return;usageBusy=true;}
+        try{var loaded=usageLogs.Refresh(DateTime.UtcNow);lock(gate){usageCache=loaded;usageError=false;}}
+        catch{lock(gate){if(!usageError)Event("energy.usage.logs.failed","运行日志暂不可读取；保留已有时长统计","WARN");usageError=true;}}
+        finally{lock(gate)usageBusy=false;}
     }
     void PowerModeChanged(object sender,Microsoft.Win32.PowerModeChangedEventArgs e){
         if(e.Mode!=Microsoft.Win32.PowerModes.Suspend && e.Mode!=Microsoft.Win32.PowerModes.Resume)return;
@@ -159,6 +168,7 @@ public sealed class ProfileEnergyService : IDisposable {
         var r=Summarize(merged,config.Price,DateTime.UtcNow);
         // Cloud energy replaces local kWh, but never replaces locally observed awake time.
         r.UsageDays=Summarize(history,config.Price,DateTime.UtcNow).UsageDays;
+        if(usageCache!=null){ProfileUsageLogReader.Merge(r.UsageDays,usageCache);r.UsageUpdatedAt=usageCache.UpdatedAt;}
         r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);
         return r;}}
     static void ValidateCloud(ProfileCloudHistory value){
@@ -256,7 +266,7 @@ public sealed class ProfileEnergyService : IDisposable {
         h.Points.Add(new ProfileEnergyPoint{Time=now,Watts=watts,BreakBefore=gap,IsGame=isGame});h.Points.RemoveAll(p=>p.Time<now.AddDays(-1));
         string oldest=China(now).AddDays(-400).ToString("yyyy-MM-dd");var remove=new List<string>();foreach(var d in h.Days)if(String.CompareOrdinal(d.Key,oldest)<0)remove.Add(d.Key);foreach(var key in remove)h.Days.Remove(key);
     }
-    public void Dispose(){lock(gate){disposed=true;timer.Dispose();}Microsoft.Win32.SystemEvents.PowerModeChanged-=PowerModeChanged;}
+    public void Dispose(){lock(gate){disposed=true;timer.Dispose();usageTimer.Dispose();}Microsoft.Win32.SystemEvents.PowerModeChanged-=PowerModeChanged;}
 }
 
 public sealed class ProfileEnergyChart : Control {

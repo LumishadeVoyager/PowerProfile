@@ -7,10 +7,11 @@ function Initialize-EnergyService {
     if(-not ('ProfileEnergyService' -as [type])){
         $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileEnergy.cs'))
         $source+="`r`n"+[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileEnergyTimeline.cs'))
+        $source+="`r`n"+[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileUsageLogs.cs'))
         $store=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileFileIO.cs')).Replace('ProfileSnapshotIO','ProfileEnergyStore')
         # Compile the existing atomic snapshot implementation into this isolated adapter.
         $usings=([regex]::Matches(($store+"`r`n"+$source),'(?m)^using [^;]+;') | ForEach-Object {$_.Value} | Select-Object -Unique) -join "`r`n"
-        Add-Type -TypeDefinition ($usings+"`r`n"+(($store+"`r`n"+$source) -replace '(?m)^using ([^;]+);','')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Web.Extensions,System.Security -ErrorAction Stop
+        Add-Type -TypeDefinition ($usings+"`r`n"+(($store+"`r`n"+$source) -replace '(?m)^using ([^;]+);','')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Web.Extensions,System.Security,System.Core -ErrorAction Stop
     }
     $dataRoot=if($SettingsPath){Split-Path -Parent $SettingsPath}else{$ScriptDir}
     $Script:EnergyService=New-Object ProfileEnergyService $dataRoot
@@ -120,7 +121,7 @@ function Update-EnergyDetails {
     $f.hint.Text=if($state.Configured){$state.Status}else{'尚未连接 · 点击“连接与电价”设置插座'}
     $Script:DashboardTip.SetToolTip($f.hint,$state.Status)
     $hasCloud=@($state.Days.Values | Where-Object {$_.Source -eq 'MiHome'}).Count -gt 0
-    $f.coverage.Text='费用：米家历史优先，其余采样估算；使用：唤醒且监测正常；高功耗 ≥150 W（* 为部分覆盖）。'
+    $f.coverage.Text='费用优先米家历史；使用 / 游戏复用运行日志估算（缺口不补）；高功耗 ≥150 W；* 为部分覆盖。'
     $f.updated.Text=if($state.ObservedAt -ne [DateTime]::MinValue){"采样 $([TimeZoneInfo]::ConvertTimeFromUtc($state.ObservedAt,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')).ToString('HH:mm:ss')) · 每分钟更新"}else{'连接插座后开始采样'}
     $f.switch.Enabled=$fresh -and $null -ne $state.On -and -not $state.Busy
     $f.switch.Text=if($state.On -eq $false){'开启插座'}else{'关闭插座'};$f.refresh.Enabled=$state.Configured -and -not $state.Busy
@@ -133,7 +134,7 @@ function Update-EnergyDailyRows {
     $tag=$Script:EnergyDetails.Tag
     if(-not $tag.Range.SelectedItem -or -not $tag.Group.SelectedItem){return}
     $count=[int]$tag.Range.SelectedItem.Value;$view=[string]$tag.Group.SelectedItem.Value
-    $key="$($State.ObservedAt.Ticks)|$($State.LocalDay)|$($State.Price)|$view|$count|$($State.Days.Count)|$($State.MonthKWh)"
+    $key="$($State.ObservedAt.Ticks)|$($State.UsageUpdatedAt.Ticks)|$($State.LocalDay)|$($State.Price)|$view|$count|$($State.Days.Count)|$($State.MonthKWh)"
     if($tag.DailyKey -eq $key){return};$tag.DailyKey=$key
     $grid=$tag.DailyGrid;$scroll=$grid.FirstDisplayedScrollingRowIndex;$selectedDate=if($grid.CurrentRow){[string]$grid.CurrentRow.Cells[0].Value}else{''}
     $grid.Rows.Clear();$day=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
@@ -142,10 +143,11 @@ function Update-EnergyDailyRows {
         $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
         $start=switch($view){'Week'{$date.AddDays(-(([int]$date.DayOfWeek+6)%7))};'Month'{$date.AddDays(1-$date.Day)};default{$date}}
         $groupKey=$start.ToString('yyyy-MM-dd')
-        if(-not $usage.ContainsKey($groupKey)){$usage[$groupKey]=@{Seconds=0.0;High=$null;Coverage=0.0;Game=$null;GameCoverage=0.0}}
+        if(-not $usage.ContainsKey($groupKey)){$usage[$groupKey]=@{Seconds=0.0;High=$null;Coverage=0.0;Game=$null;GameCoverage=0.0;FromLogs=$false}}
         $usage[$groupKey].Seconds+=$item.Value.Seconds
         if($null -ne $item.Value.HighPowerSeconds){$usage[$groupKey].High+=$item.Value.HighPowerSeconds;$usage[$groupKey].Coverage+=$item.Value.HighPowerCoverageSeconds}
         if($null -ne $item.Value.GameSeconds){$usage[$groupKey].Game+=$item.Value.GameSeconds;$usage[$groupKey].GameCoverage+=$item.Value.GameCoverageSeconds}
+        if($item.Value.UsageSource){$usage[$groupKey].FromLogs=$true}
     }
     foreach($item in $State.Days.GetEnumerator()){
         $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
@@ -167,10 +169,11 @@ function Update-EnergyDailyRows {
         $high=if($u -and $null -ne $u.High){(Format-EnergyDuration $u.High)+$(if($u.Coverage -lt $u.Seconds-0.5){' *'})}else{'未统计'}
         $game=if($u -and $null -ne $u.Game){(Format-EnergyDuration $u.Game)+$(if($u.GameCoverage -lt $u.Seconds-0.5){' *'})}else{'未统计'}
         $index=$grid.Rows.Add([object[]]@($date,$amount,$cost,$coverage,$online,$high,$game))
-        $grid.Rows[$index].Tag=if($u){"$date · 本机监测 $(Format-EnergyDuration $u.Seconds) · 高功耗覆盖 $(Format-EnergyDuration $u.Coverage) · 游戏识别覆盖 $(Format-EnergyDuration $u.GameCoverage)；* 表示部分覆盖"}else{"$date · 没有本机监测时长；米家电量不能反推使用或游戏时长"}
-        $grid.Rows[$index].Cells[4].ToolTipText='电脑唤醒且监测正常的连续采样时长；断线、休眠及程序停止期间不补算。'
+        $usageSource=if($u -and $u.FromLogs){'运行日志 / 采样估算'}else{'本机监测'}
+        $grid.Rows[$index].Tag=if($u){"$date · $usageSource $(Format-EnergyDuration $u.Seconds) · 高功耗覆盖 $(Format-EnergyDuration $u.Coverage) · 游戏识别覆盖 $(Format-EnergyDuration $u.GameCoverage)；* 表示部分覆盖"}else{"$date · 没有本机监测时长；米家电量不能反推使用或游戏时长"}
+        $grid.Rows[$index].Cells[4].ToolTipText='复用运行日志与有效采样估算；有运行日志时，即使插座断线仍可记录使用时长。日志缺口不补，重叠来源不相加。'
         $grid.Rows[$index].Cells[5].ToolTipText=if($u -and $null -ne $u.High){'输入功率 ≥150 W；有效统计覆盖 {0:N2} 小时，旧记录未统计部分未知。' -f ($u.Coverage/3600)}else{'旧记录没有高功耗分段统计；不当作零。'}
-        $grid.Rows[$index].Cells[6].ToolTipText='复用自动检测已识别的游戏状态，包含已确认游戏的菜单及后台保留期；按采样区间估算，过期或缺失识别不计为零。'
+        $grid.Rows[$index].Cells[6].ToolTipText='复用历史游戏识别日志与当前检测结果，包含已确认游戏的菜单及后台保留期；单纯切换到游戏档不会计入，日志缺口不当作零。'
         $period=New-Object ProfileEnergyPeriod;$period.Label=if($view -eq 'Month'){$start.ToString('yy-MM')}else{$start.ToString('MM-dd')}
         if($entry -and $null -ne $State.Price){$period.Cost=$entry.KWh*[double]$State.Price}
         if($u -and $u.Seconds -gt 0){$period.UsageHours=$u.Seconds/3600}
@@ -178,7 +181,7 @@ function Update-EnergyDailyRows {
         if($u -and $null -ne $u.Game){$period.GameHours=$u.Game/3600;$period.GameCoverageHours=$u.GameCoverage/3600}
         $periods.Insert(0,$period)
         $grid.Rows[$index].Cells[0].ToolTipText=if($view -eq 'Week'){"$groupKey 至 $($start.AddDays(6).ToString('yyyy-MM-dd'))（北京时间）；本周期截至今日"}elseif($view -eq 'Month'){"自然月 $date；本周期截至今日"}else{'北京时间日期'}
-        if($null -eq $entry){$grid.Rows[$index].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(133,142,150)}
+        if($null -eq $entry){foreach($column in @(1,2,3)){$grid.Rows[$index].Cells[$column].Style.ForeColor=[Drawing.Color]::FromArgb(133,142,150)}}
         if($date -eq $selectedDate){$grid.CurrentCell=$grid.Rows[$index].Cells[0]}
     }
     if($scroll -ge 0 -and $scroll -lt $grid.Rows.Count){$grid.FirstDisplayedScrollingRowIndex=$scroll}
