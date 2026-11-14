@@ -100,7 +100,7 @@ try {
     $dailyFixture.Days[$localDay]=New-Object ProfileEnergyDay;$dailyFixture.Days[$localDay].Seconds=3600
     $dailyState=[ProfileEnergyService]::Summarize($dailyFixture,[decimal]0.7,[DateTime]::UtcNow)
     Update-EnergyDailyRows $dailyState
-    Assert-Equal 'recorded zero remains distinct from uncollected date in table' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[1].Value '0.000 kWh'
+    Assert-Equal 'recorded zero remains distinct from uncollected date in table' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[1].Value '0.000'
     Assert-Equal 'zero energy yields zero cost at configured tariff' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[2].Value '¥0.00'
     $Script:EnergyDetails.Tag.Group.SelectedIndex=1
     Assert-Equal 'weekly history exposes eight calendar weeks' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 8
@@ -112,6 +112,7 @@ try {
     $Script:EnergyDetails.Tag.Group.SelectedIndex=0
     $dailyFixture.Days[$localDay].KWh=0.5
     $dailyFixture.Days[$localDay].HighPowerSeconds=600;$dailyFixture.Days[$localDay].HighPowerCoverageSeconds=1800
+    $dailyFixture.Days[$localDay].GameSeconds=1200;$dailyFixture.Days[$localDay].GameCoverageSeconds=2400
     $previousDay=([DateTime]::ParseExact($localDay,'yyyy-MM-dd',$null)).AddDays(-1).ToString('yyyy-MM-dd')
     $dailyFixture.Days[$previousDay]=New-Object ProfileEnergyDay
     $dailyFixture.Days[$previousDay].KWh=1.5;$dailyFixture.Days[$previousDay].Source='MiHome'
@@ -126,12 +127,29 @@ try {
     Assert-Equal 'local coverage remains explicit' ($Script:EnergyDetails.Tag.Fields.dayCoverage.Text -like '*1.0 小时*') $true
     Assert-Equal 'cloud and local coverage are distinguished' ((Get-EnergyPeriodCoverage $displayState $previousDay) -like '*米家 1 天*估算*') $true
     Assert-Equal 'hourly reference uses current watts and fixed tariff' ($Script:EnergyDetails.Tag.Fields.hourCost.Text -like '*0.098*') $true
-    Assert-Equal 'usage column displays monitored awake hours' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[4].Value '1.00 h'
-    Assert-Equal 'high-power column uses 150W segment duration' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[5].Value '0.17 h*'
+    Assert-Equal 'usage column displays monitored awake hours' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[4].Value '1 小时 00 分'
+    Assert-Equal 'high-power column uses 150W segment duration' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[5].Value '10 分钟 *'
     Assert-Equal 'legacy high-power duration stays unknown' $Script:EnergyDetails.Tag.DailyGrid.Rows[1].Cells[5].Value '未统计'
+    Assert-Equal 'game duration is readable and discloses partial coverage' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[6].Value '20 分钟 *'
+    Assert-Equal 'legacy gaming remains unknown rather than zero' $Script:EnergyDetails.Tag.DailyGrid.Rows[1].Cells[6].Value '未统计'
+    Assert-Equal 'record hint explains game detection coverage' ($Script:EnergyDetails.Tag.Fields.recordHint.Text -like '*游戏识别覆盖 40 分钟*') $true
+    Assert-Equal 'ledger shows at least six full rows' (($Script:EnergyDetails.Tag.DailyGrid.Height-$Script:EnergyDetails.Tag.DailyGrid.ColumnHeadersHeight) -ge 6*$Script:EnergyDetails.Tag.DailyGrid.RowTemplate.Height) $true
+    Assert-Equal 'short measured durations are not rounded down to zero' (Format-EnergyDuration 30) '<1 分钟'
     $latestPeriod=$Script:EnergyDetails.Tag.Timeline.Periods[$Script:EnergyDetails.Tag.Timeline.Periods.Count-1]
     Assert-Equal 'combined timeline retains cost and two independent hour series' ($latestPeriod.Cost -eq 0.35 -and $latestPeriod.UsageHours -eq 1 -and [Math]::Abs($latestPeriod.HighHours-1.0/6) -lt 0.00001) $true
     Assert-Equal 'partial high-power coverage remains disclosed' $latestPeriod.HighCoverageHours 0.5
+    Assert-Equal 'game duration is included in the combined timeline' ([Math]::Abs($latestPeriod.GameHours-1.0/3) -lt 0.00001) $true
+    $Script:EnergyDetails.Tag.Group.SelectedIndex=1;Update-EnergyDetails $displayState
+    Assert-Equal 'weekly ledger includes game duration' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[6].Value '20 分钟 *'
+    $Script:EnergyDetails.Tag.Group.SelectedIndex=2;Update-EnergyDetails $displayState
+    Assert-Equal 'monthly ledger includes game duration' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[6].Value '20 分钟 *'
+    $Script:EnergyDetails.Tag.Group.SelectedIndex=0;Update-EnergyDetails $displayState
+    $Script:EnergyDetails.Tag.DailyGrid.FirstDisplayedScrollingRowIndex=5;$displayState.ObservedAt=[DateTime]::UtcNow.AddMilliseconds(-1);Update-EnergyDetails $displayState
+    Assert-Equal 'refresh preserves ledger scroll position' $Script:EnergyDetails.Tag.DailyGrid.FirstDisplayedScrollingRowIndex 5
+    $Script:EnergyDetails.Tag.DailyGrid.FirstDisplayedScrollingRowIndex=0
+    $Script:EnergyDetails.Tag.DailyGrid.CurrentCell=$Script:EnergyDetails.Tag.DailyGrid.Rows[1].Cells[0]
+    Assert-Equal 'selection changes record coverage explanation' ($Script:EnergyDetails.Tag.Fields.recordHint.Text -like '*不能反推*') $true
+    $Script:EnergyDetails.Tag.DailyGrid.CurrentCell=$Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[0]
     $Script:EnergyDetails.Tag.ChartMode.SelectedIndex=1
     Assert-Equal 'power view remains available alongside billing timeline' ($Script:EnergyDetails.Tag.Chart.Visible -and -not $Script:EnergyDetails.Tag.Timeline.Visible) $true
     $Script:EnergyDetails.Tag.ChartMode.SelectedIndex=0

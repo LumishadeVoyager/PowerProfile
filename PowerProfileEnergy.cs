@@ -87,8 +87,8 @@ public sealed class ProfilePlugTransport {
         if(!accepted)throw new InvalidDataException("插座未确认开关请求。");}
 }
 
-public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} }
-public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} }
+public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} public bool? IsGame {get;set;} }
+public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} public double? GameSeconds {get;set;} public double GameCoverageSeconds {get;set;} }
 public sealed class ProfileCloudHistory {public uint DeviceId {get;set;} public string Model {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} public string Query {get;set;} public double Multiplier {get;set;} public string FetchedAt {get;set;} }
 public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
@@ -181,7 +181,7 @@ public sealed class ProfileEnergyService : IDisposable {
         var r=new ProfileEnergySnapshot{Price=price,LocalDay=today.ToString("yyyy-MM-dd"),WeekStart=week.ToString("yyyy-MM-dd"),MonthStart=month.ToString("yyyy-MM-dd")};
         foreach(var item in h.Days){DateTime date;var value=item.Value;
             if(!DateTime.TryParseExact(item.Key,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date) || date>today || value==null || Double.IsNaN(value.KWh) || Double.IsInfinity(value.KWh) || value.KWh<0 || Double.IsNaN(value.Seconds) || Double.IsInfinity(value.Seconds) || value.Seconds<0)continue;
-            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source,HighPowerSeconds=value.HighPowerSeconds,HighPowerCoverageSeconds=value.HighPowerCoverageSeconds};
+            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source,HighPowerSeconds=value.HighPowerSeconds,HighPowerCoverageSeconds=value.HighPowerCoverageSeconds,GameSeconds=value.GameSeconds,GameCoverageSeconds=value.GameCoverageSeconds};
             if(value.Source!="MiHome")r.UsageDays[item.Key]=r.Days[item.Key];
             if(date==today){r.TodayKWh=value.KWh;r.TodaySeconds=value.Seconds;}
             if(date>=week){r.WeekKWh=(r.WeekKWh??0)+value.KWh;r.WeekSeconds+=value.Seconds;}
@@ -206,10 +206,10 @@ public sealed class ProfileEnergyService : IDisposable {
         if(command.HasValue && (bool)state!=command.Value)throw new InvalidDataException("开关读回状态与请求不一致；请在米家核实。");
         if(command.HasValue)Event("energy.switch.confirmed","实际状态已读回：插座"+((bool)state?"已开启":"已关闭"),"INFO",operation);
         double watts;double? validPower=power!=null && double.TryParse(Convert.ToString(power,CultureInfo.InvariantCulture),NumberStyles.Float,CultureInfo.InvariantCulture,out watts) && !double.IsNaN(watts) && !double.IsInfinity(watts) && watts>=0 && watts<=3680 ? watts : (double?)null;
-        DateTime now=DateTime.UtcNow;
+        DateTime now=DateTime.UtcNow;bool? isGame=ReadGameState(root,now);
         lock(gate){if(snapshot.Status!="已连接" && snapshot.Status!="功率读数未提供")Event("energy.connected","插座型号与授权校验通过","INFO",operation);
             snapshot.On=(bool)state;snapshot.Watts=validPower;snapshot.ObservedAt=now;snapshot.Status=validPower.HasValue?"已连接":"功率读数未提供";
-            if(validPower.HasValue){history.Device=c.Address;AddSample(history,now,validPower.Value);}
+            if(validPower.HasValue){history.Device=c.Address;AddSample(history,now,validPower.Value,isGame);}
             ProfileEnergyStore.Write(Path.Combine(root,"energy.history.json"),Serializer().Serialize(history));}
     }catch(Exception ex){lock(gate){string message=ex is SocketException ? "插座无响应 · 检查同一局域网、IP 和固件支持" : ex is CryptographicException ? "设备授权无法解密 · 请重新设置 Token" : ex.Message;
         if(snapshot.Status!=message || command.HasValue)Event(command.HasValue?"energy.switch.failed":"energy.sample.failed",message,"WARN",operation);snapshot.Status=message;
@@ -217,7 +217,25 @@ public sealed class ProfileEnergyService : IDisposable {
         if(history.Points.Count>0)history.Points[history.Points.Count-1].InvalidAfter=true;
     }}finally{lock(gate){busy=false;snapshot.Busy=false;}}}
     static DateTime China(DateTime utc){return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc,DateTimeKind.Utc),TimeZoneInfo.FindSystemTimeZoneById("China Standard Time"));}
-    public static void AddSample(ProfileEnergyHistory h,DateTime now,double watts){
+    public static bool? ReadGameState(string root,DateTime utcNow){
+        try{
+            string enabled=Path.Combine(root,"auto_enabled.txt");
+            if(File.Exists(enabled) && !String.Equals(ProfileEnergyStore.Read(enabled).Trim(),"true",StringComparison.OrdinalIgnoreCase))return null;
+            return ParseGameState(ProfileEnergyStore.Read(Path.Combine(root,"game_detection_state.json")),utcNow);
+        }catch{return null;}
+    }
+    public static bool? ParseGameState(string json,DateTime utcNow){
+        try{
+            var state=Serializer().Deserialize<Dictionary<string,object>>(json);object stamp,game,source;
+            if(state==null || !state.TryGetValue("observedAt",out stamp) || !(stamp is string) || !state.TryGetValue("isGame",out game) || !(game is bool) || !state.TryGetValue("source",out source) || !(source is string) || String.IsNullOrEmpty((string)source))return null;
+            DateTimeOffset observed;if(!DateTimeOffset.TryParse((string)stamp,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal,out observed))return null;
+            double age=(utcNow-observed.UtcDateTime).TotalSeconds;if(age<0 || age>90)return null;
+            if(!(bool)game){switch((string)source){case "NoGameSignal":case "BackgroundInactive":case "WorkstationLocked":case "StartupGuard":return false;default:return null;}}
+            switch((string)source){case "ConfiguredGame":case "LibraryGame":case "Foreground3DLoad":case "ConfirmedForeground":case "BackgroundGrace":case "BackgroundGameLoad":return true;default:return null;}
+        }catch{return null;}
+    }
+    public static void AddSample(ProfileEnergyHistory h,DateTime now,double watts){AddSample(h,now,watts,null);}
+    public static void AddSample(ProfileEnergyHistory h,DateTime now,double watts,bool? isGame){
         if(double.IsNaN(watts) || double.IsInfinity(watts) || watts<0 || watts>3680)throw new ArgumentOutOfRangeException("watts");
         now=DateTime.SpecifyKind(now,DateTimeKind.Utc);bool gap=true;
         if(h.Points.Count>0){var previous=h.Points[h.Points.Count-1];double seconds=(now-previous.Time).TotalSeconds;
@@ -226,9 +244,16 @@ public sealed class ProfileEnergyService : IDisposable {
                     double duration=(end-at).TotalSeconds,startW=previous.Watts+(watts-previous.Watts)*(at-previous.Time).TotalSeconds/seconds,endW=previous.Watts+(watts-previous.Watts)*(end-previous.Time).TotalSeconds/seconds;
                     string key=local.ToString("yyyy-MM-dd");if(!h.Days.ContainsKey(key))h.Days[key]=new ProfileEnergyDay();var day=h.Days[key];day.KWh+=(startW+endW)/2*duration/3600000;day.Seconds+=duration;
                     double fraction=startW>=HighPowerWatts && endW>=HighPowerWatts ? 1 : startW<HighPowerWatts && endW<HighPowerWatts ? 0 : (Math.Max(startW,endW)-HighPowerWatts)/Math.Abs(endW-startW);
-                    day.HighPowerSeconds=(day.HighPowerSeconds??0)+duration*fraction;day.HighPowerCoverageSeconds+=duration;at=end;}
+                    day.HighPowerSeconds=(day.HighPowerSeconds??0)+duration*fraction;day.HighPowerCoverageSeconds+=duration;
+                    if(previous.IsGame.HasValue && isGame.HasValue){
+                        // Place a binary-state transition midway between observations, then split by day.
+                        DateTime transition=previous.Time.AddSeconds(seconds/2);
+                        double gameDuration=previous.IsGame==isGame ? (isGame.Value?duration:0) : previous.IsGame.Value ? Math.Max(0,( (end<transition?end:transition)-at).TotalSeconds) : Math.Max(0,(end-(at>transition?at:transition)).TotalSeconds);
+                        day.GameSeconds=(day.GameSeconds??0)+gameDuration;day.GameCoverageSeconds+=duration;
+                    }
+                    at=end;}
             }}
-        h.Points.Add(new ProfileEnergyPoint{Time=now,Watts=watts,BreakBefore=gap});h.Points.RemoveAll(p=>p.Time<now.AddDays(-1));
+        h.Points.Add(new ProfileEnergyPoint{Time=now,Watts=watts,BreakBefore=gap,IsGame=isGame});h.Points.RemoveAll(p=>p.Time<now.AddDays(-1));
         string oldest=China(now).AddDays(-400).ToString("yyyy-MM-dd");var remove=new List<string>();foreach(var d in h.Days)if(String.CompareOrdinal(d.Key,oldest)<0)remove.Add(d.Key);foreach(var key in remove)h.Days.Remove(key);
     }
     public void Dispose(){lock(gate){disposed=true;timer.Dispose();}Microsoft.Win32.SystemEvents.PowerModeChanged-=PowerModeChanged;}

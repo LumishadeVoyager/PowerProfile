@@ -62,6 +62,32 @@ try {
     [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(580),150)
     Assert 'threshold is inclusive and high-power time never exceeds awake time' ($usage.Days['2026-10-09'].HighPowerSeconds -eq 180 -and $usage.Days['2026-10-09'].Seconds -eq 210)
     Assert 'legacy days have unknown high-power duration rather than zero' ($null -eq (New-Object ProfileEnergyDay).HighPowerSeconds)
+    $gaming=New-Object ProfileEnergyHistory
+    $gaming.Points=New-Object 'Collections.Generic.List[ProfileEnergyPoint]'
+    $gaming.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
+    [ProfileEnergyService]::AddSample($gaming,$at,100,$false)
+    [ProfileEnergyService]::AddSample($gaming,$at.AddSeconds(60),200,$true)
+    Assert 'gaming transition estimate splits at China midnight' ($gaming.Days['2026-10-08'].GameSeconds -eq 0 -and $gaming.Days['2026-10-09'].GameSeconds -eq 30)
+    [ProfileEnergyService]::AddSample($gaming,$at.AddSeconds(120),200,$true)
+    Assert 'confirmed gaming accumulates within monitored awake duration' ($gaming.Days['2026-10-09'].GameSeconds -eq 90 -and $gaming.Days['2026-10-09'].GameCoverageSeconds -eq 90)
+    [ProfileEnergyService]::AddSample($gaming,$at.AddSeconds(180),200,$null)
+    [ProfileEnergyService]::AddSample($gaming,$at.AddSeconds(240),200,$true)
+    Assert 'unknown game state creates a coverage gap instead of zero gaming' ($gaming.Days['2026-10-09'].GameSeconds -eq 90 -and $gaming.Days['2026-10-09'].GameCoverageSeconds -eq 90)
+    [ProfileEnergyService]::AddSample($gaming,$at.AddSeconds(500),200,$true)
+    Assert 'offline game time is never backfilled' ($gaming.Days['2026-10-09'].GameSeconds -eq 90)
+    $gameJson=@{observedAt=$at.ToString('o');isGame=$true;source='LibraryGame'}|ConvertTo-Json
+    Assert 'fresh confirmed detector output is recognized' ([ProfileEnergyService]::ParseGameState($gameJson,$at.AddSeconds(30)) -eq $true)
+    [IO.File]::WriteAllText((Join-Path $ScriptDir 'game_detection_state.json'),$gameJson)
+    Assert 'game collector reads existing detector without invoking power workers' ([ProfileEnergyService]::ReadGameState($ScriptDir,$at) -eq $true)
+    [IO.File]::WriteAllText((Join-Path $ScriptDir 'auto_enabled.txt'),'false')
+    Assert 'paused automatic detection does not reuse a recent game signal' ($null -eq [ProfileEnergyService]::ReadGameState($ScriptDir,$at))
+    Assert 'stale detector output is unknown rather than non-game' ($null -eq [ProfileEnergyService]::ParseGameState($gameJson,$at.AddSeconds(91)))
+    Assert 'future detector output is rejected' ($null -eq [ProfileEnergyService]::ParseGameState($gameJson,$at.AddSeconds(-1)))
+    Assert 'manual game profile is not evidence of gameplay' ($null -eq [ProfileEnergyService]::ParseGameState(($gameJson.Replace('LibraryGame','Game')),$at))
+    Assert 'malformed detector snapshot does not break energy monitoring' ($null -eq [ProfileEnergyService]::ParseGameState('{bad',$at))
+    $notGame=@{observedAt=$at.ToString('o');isGame=$false;source='WorkstationLocked'}|ConvertTo-Json
+    Assert 'fresh locked detector output is a known non-game interval' ([ProfileEnergyService]::ParseGameState($notGame,$at) -eq $false)
+    Assert 'legacy game duration stays unknown' ($null -eq (New-Object ProfileEnergyDay).GameSeconds)
     $flags=[Reflection.BindingFlags]'Instance,NonPublic'
     $serviceHistory=[ProfileEnergyService].GetField('history',$flags).GetValue($Script:EnergyService)
     $serviceHistory.Points.Clear();$serviceHistory.Days.Clear()
@@ -113,6 +139,7 @@ try {
     $local=@{Device='192.168.1.254';Points=@();Days=@{}}
     $local.Days[$day]=@{KWh=2;Seconds=3600}
     $local.Days[$day].HighPowerSeconds=600;$local.Days[$day].HighPowerCoverageSeconds=1200
+    $local.Days[$day].GameSeconds=900;$local.Days[$day].GameCoverageSeconds=1800
     [IO.File]::WriteAllText((Join-Path $ScriptDir 'energy.history.json'),($local|ConvertTo-Json -Depth 5))
     $Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
     $cloud=@{DeviceId=12345;Model='cuco.plug.v3';Days=@{};Multiplier=0.01;Query='11.1:stat_day'}
@@ -121,6 +148,7 @@ try {
     Assert 'cloud complete day replaces local estimate without double counting' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
     Assert 'cloud provenance survives reporting' ($Script:EnergyService.GetSnapshot().Days[$day].Source -eq 'MiHome')
     Assert 'cloud kWh replacement preserves local awake and high-power statistics' ($Script:EnergyService.GetSnapshot().UsageDays[$day].Seconds -eq 3600 -and $Script:EnergyService.GetSnapshot().UsageDays[$day].HighPowerSeconds -eq 600)
+    Assert 'cloud import preserves independent game duration and coverage' ($Script:EnergyService.GetSnapshot().UsageDays[$day].GameSeconds -eq 900 -and $Script:EnergyService.GetSnapshot().UsageDays[$day].GameCoverageSeconds -eq 1800)
     Assert 'original local integration remains available' ((Get-Content (Join-Path $ScriptDir 'energy.history.json') -Raw|ConvertFrom-Json).Days.$day.KWh -eq 2)
     [void]$Script:EnergyService.ImportCloudHistory(($cloud|ConvertTo-Json -Depth 5))
     Assert 'repeated imports remain idempotent' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
@@ -128,6 +156,7 @@ try {
     Assert 'another plug history is rejected without altering totals' ($rejected -and $Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
     $Script:EnergyService.Dispose();$Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
     Assert 'cloud history persists across restart' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
+    Assert 'game duration and coverage survive service restart' ($Script:EnergyService.GetSnapshot().UsageDays[$day].GameSeconds -eq 900 -and $Script:EnergyService.GetSnapshot().UsageDays[$day].GameCoverageSeconds -eq 1800)
     $Script:EnergyService.Configure('','',[decimal]0.7)
     Assert 'disconnect clears device readings and stored credentials' (-not $Script:EnergyService.GetSnapshot().Configured -and $null -eq $Script:EnergyService.GetSnapshot().Watts -and -not ([IO.File]::ReadAllText((Join-Path $ScriptDir 'energy.settings.json')) | ConvertFrom-Json).Secret)
 } finally {
