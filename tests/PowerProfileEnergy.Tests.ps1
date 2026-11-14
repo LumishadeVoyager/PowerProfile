@@ -22,9 +22,10 @@ try {
     $Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
     Assert 'encrypted connection and tariff survive restart' ($Script:EnergyService.GetSnapshot().Configured -and $Script:EnergyService.GetSnapshot().Price -eq [decimal]0.7)
     $Script:EnergyService.Dispose()
-    $fixture='{"Device":"192.168.1.254","Points":[],"Days":{"2020-01-01":{"KWh":1.25,"Seconds":3600}}}'
+    $fixture='{"Device":"192.168.1.254","Points":[{"Time":"2026-10-08T15:59:00Z","Watts":50}],"Days":{"2020-01-01":{"KWh":1.25,"Seconds":3600}}}'
     [IO.File]::WriteAllText((Join-Path $ScriptDir 'energy.history.json'),$fixture)
     $Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
+    Assert 'restart marks preceding sample as an unobserved boundary' $Script:EnergyService.GetSnapshot().Points[0].InvalidAfter
     $Script:EnergyService.Configure('192.168.1.254',$secret,[decimal]0.8)
     Assert 're-entering identical credentials preserves accumulated energy' ($Script:EnergyService.GetSnapshot().Days['2020-01-01'].KWh -eq 1.25)
     Assert 'tariff edit preserves history and updates report tariff' ($Script:EnergyService.GetSnapshot().Price -eq [decimal]0.8)
@@ -63,6 +64,7 @@ try {
     Assert 'legacy days have unknown high-power duration rather than zero' ($null -eq (New-Object ProfileEnergyDay).HighPowerSeconds)
     $flags=[Reflection.BindingFlags]'Instance,NonPublic'
     $serviceHistory=[ProfileEnergyService].GetField('history',$flags).GetValue($Script:EnergyService)
+    $serviceHistory.Points.Clear();$serviceHistory.Days.Clear()
     [ProfileEnergyService]::AddSample($serviceHistory,$at,100)
     $powerEvent=New-Object Microsoft.Win32.PowerModeChangedEventArgs ([Microsoft.Win32.PowerModes]::Suspend)
     [void][ProfileEnergyService].GetMethod('PowerModeChanged',$flags).Invoke($Script:EnergyService,@($null,$powerEvent.PSObject.BaseObject))

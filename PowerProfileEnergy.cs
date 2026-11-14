@@ -113,6 +113,8 @@ public sealed class ProfileEnergyService : IDisposable {
         history=new ProfileEnergyHistory{Points=new List<ProfileEnergyPoint>(),Days=new Dictionary<string,ProfileEnergyDay>()};
         try{var loaded=json.Deserialize<ProfileEnergyHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.history.json")));if(loaded.Points!=null && loaded.Days!=null && loaded.Device==config.Address)history=loaded;}
         catch(FileNotFoundException){}catch{Event("energy.history.failed","历史记录无法读取；本次重新累计","WARN");snapshot.Status="历史记录损坏 · 重新累计";}
+        // Even a short process restart is an unobserved interval.
+        if(history.Points.Count>0)history.Points[history.Points.Count-1].InvalidAfter=true;
         snapshot.Configured=!String.IsNullOrWhiteSpace(config.Address) && !String.IsNullOrWhiteSpace(config.Secret);snapshot.Price=config.Price;
         try{cloud=Serializer().Deserialize<ProfileCloudHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.cloud.history.json")));ValidateCloud(cloud);}
         catch(FileNotFoundException){}catch{cloud=null;Event("energy.cloud.cache.failed","米家历史缓存无法读取；保留本机估算","WARN");}
