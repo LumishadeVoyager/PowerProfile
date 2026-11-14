@@ -3,6 +3,7 @@ on: [push, pull_request]
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Parse scripts and run decision/session tests (Windows PowerShell 5.1)
@@ -14,13 +15,10 @@ jobs:
             [void][Management.Automation.Language.Parser]::ParseFile($_.FullName,[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw ($errors | Out-String) }
           }
-          & .\tests\PowerProfileDetection.Tests.ps1
-          & .\tests\PowerProfileUI.Tests.ps1
-          & .\tests\PowerProfileSettings.Tests.ps1
-          & .\tests\PowerProfileEnergy.Tests.ps1
-          & .\tests\PowerProfileWorkstation.Tests.ps1
-          & .\tests\PowerProfileTelemetry.Tests.ps1
-          & .\tests\PowerProfileLogViewer.Tests.ps1
-          & .\tests\PowerProfileFileIO.Tests.ps1
-          & .\tests\PowerProfileGame.Tests.ps1
+          # UI suites define callbacks and mock workers; isolate their process state.
+          foreach ($suite in @('Detection','UI','Settings','Energy','Workstation','Telemetry','LogViewer','FileIO','Game')) {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tests\PowerProfile$suite.Tests.ps1"
+            if ($LASTEXITCODE -ne 0) { throw "Failed suite: $suite" }
+          }
           python -m unittest discover -s tests -p test_cloud_history.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cloud history tests failed' }
