@@ -38,6 +38,7 @@ try{
         $timer.Start();[void]$form.ShowDialog();$timer.Dispose();$opener.Dispose()
         $saved=Get-Content $SettingsPath -Raw | ConvertFrom-Json
         Assert "modal callback saves $frequency MHz" ($saved.modes.Idle.freqMax -eq $frequency -and $form.Tag.LastSaveError -eq '')
+        Assert 'settings diagnostics follow the configured directory' (Test-Path (Join-Path $root 'save_debug.log'))
         Assert 'saved selection reaches worker immediately' ($Script:appliedFrequency -eq $frequency -and $Script:appliedMode -eq 'Idle')
         Assert 'save preserves CPU stability fields' ($saved.modes.Idle.boost -eq 0 -and $saved.modes.Idle.min -eq 50 -and $saved.modes.Game.freqMax -eq 0)
         Assert 'save preserves workstation and device-independent settings' ($saved.workstation.freqMax -eq 1800)

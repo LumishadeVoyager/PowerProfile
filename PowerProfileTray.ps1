@@ -913,7 +913,7 @@ function Show-Settings {
         $form=$sender.FindForm();$context=$form.Tag
         $work=$context.Work;$controls=$context.Controls
         $cmbAuto=$context.Auto;$cmbIdle=$context.Idle;$cmbToast=$context.Toast;$cmbUnlock=$context.Unlock;$cmbQuiet=$context.Quiet;$cmbExit=$context.Exit
-        $diag = 'E:\PowerProfile\save_debug.log'
+        $diag = Join-Path (Split-Path -Parent $context.SettingsFile) 'save_debug.log'
         try {
             Add-Content -Path $diag -Value ("{0}  Click triggered" -f (Get-Date -Format 'HH:mm:ss.fff')) -Encoding UTF8
             Add-Content -Path $diag -Value ("  work is null? {0}; controls count: {1}" -f ($null -eq $work), $controls.Count) -Encoding UTF8
