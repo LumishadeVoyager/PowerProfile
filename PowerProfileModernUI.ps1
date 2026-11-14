@@ -9,6 +9,7 @@ $Script:TelemetryProcess=$null
 $Script:LogViewer=$null
 $Script:DashboardTip=New-Object Windows.Forms.ToolTip
 . (Join-Path $ScriptDir 'PowerProfileEnergyUI.ps1')
+. (Join-Path $ScriptDir 'PowerProfileDeviceHubUI.ps1')
 
 function Get-ModernUIOptions {
     $o=@{toastEnabled=$true}
@@ -245,7 +246,8 @@ function Show-ModernDashboard {
         $caption=New-ModernLabel $row[0] $row[2] 43 143;$caption.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$energy.Controls.Add($caption)
         $value=New-ModernLabel '--' $row[2] 68 143;$value.Font=New-Object Drawing.Font 'Microsoft YaHei UI',11,([Drawing.FontStyle]::Bold);$energy.Controls.Add($value);$fields[$row[1]]=$value
     }
-    $source=New-ModernLabel '米家智能插座 3 · 连接后实际采样' 14 99 280;$source.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$source.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$energy.Controls.Add($source)
+    $source=New-ModernLabel '米家智能插座 3 · 实际采样' 14 99 210;$source.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$source.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$energy.Controls.Add($source)
+    $hubLink=New-Object Windows.Forms.LinkLabel;$hubLink.Text='设备中枢 →';$hubLink.Font=$Script:ModernFont;$hubLink.SetBounds(234,97,108,25);$hubLink.LinkColor=[Drawing.Color]::FromArgb(39,106,159);$energy.Controls.Add($hubLink);$hubLink.Add_LinkClicked({Show-DeviceHub})
     $energyLink=New-Object Windows.Forms.LinkLabel;$energyLink.Text='用电详情 →';$energyLink.Font=$Script:ModernFont;$energyLink.SetBounds(352,97,110,25);$energyLink.LinkColor=[Drawing.Color]::FromArgb(39,106,159);$energy.Controls.Add($energyLink);$energyLink.Add_LinkClicked({try{Show-EnergyDetails}catch{Write-ProfileEvent 'ui.energy.open.failed' $_.Exception.GetBaseException().Message 'ERROR';[void][Windows.Forms.MessageBox]::Show('用电详情暂时无法打开，请查看日志。','PowerProfile')}})
     $details=New-Object Windows.Forms.Panel;$details.BackColor=[Drawing.Color]::White;$details.SetBounds(12,545,476,193);$form.Controls.Add($details)
     foreach($row in @(@('配置频率上限','limit',13),@('键鼠未输入','idle',41),@('供电状态','power',69),@('连续运行','uptime',97))){
@@ -283,6 +285,7 @@ function Show-ModernDashboard {
 
 # A configured meter continues accumulating while the dashboard is closed.
 try {Initialize-EnergyService} catch {Write-ProfileEvent 'energy.start.failed' '用电模块无法启动；原电源控制继续运行' 'ERROR' @{reason=$_.Exception.GetBaseException().Message}}
+Initialize-DeviceHub
 
 function Update-WorkstationTimeControls {
     param($Form)

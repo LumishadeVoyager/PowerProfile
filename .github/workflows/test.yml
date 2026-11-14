@@ -16,9 +16,9 @@ jobs:
             if ($errors.Count) { throw ($errors | Out-String) }
           }
           # UI suites define callbacks and mock workers; isolate their process state.
-          foreach ($suite in @('Detection','UI','Settings','Energy','Workstation','Telemetry','LogViewer','FileIO','Game')) {
+          foreach ($suite in @('Detection','UI','Settings','Energy','DeviceHub','Workstation','Telemetry','LogViewer','FileIO','Game')) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tests\PowerProfile$suite.Tests.ps1"
             if ($LASTEXITCODE -ne 0) { throw "Failed suite: $suite" }
           }
-          python -m unittest discover -s tests -p test_cloud_history.py
-          if ($LASTEXITCODE -ne 0) { throw 'Cloud history tests failed' }
+          python -m unittest discover -s tests -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'Python tests failed' }

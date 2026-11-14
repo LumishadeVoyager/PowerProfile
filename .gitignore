@@ -22,5 +22,6 @@ logs/
 energy.settings.json
 energy.history.json
 energy.cloud.history.json
+devices.hub.json
 auto_load_state.json
 __pycache__/
