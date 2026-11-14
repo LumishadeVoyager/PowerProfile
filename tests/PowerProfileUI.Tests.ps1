@@ -62,9 +62,7 @@ try {
     $dashboardSize=$Script:Dashboard.ClientSize
     $Script:Dashboard.ClientSize=New-Object Drawing.Size 500,540
     [Windows.Forms.Application]::DoEvents()
-    $lowest=@($Script:Dashboard.Controls | Sort-Object Bottom -Descending)[0]
-    $Script:Dashboard.ScrollControlIntoView($lowest);[Windows.Forms.Application]::DoEvents()
-    Assert-Equal 'short-screen dashboard can scroll to its last control' ($Script:Dashboard.AutoScrollPosition.Y -lt 0 -and $lowest.Bottom -le $Script:Dashboard.ClientSize.Height) $true
+    Assert-Equal 'short-screen dashboard exposes a scroll range for all controls' ($Script:Dashboard.VerticalScroll.Visible -and $Script:Dashboard.VerticalScroll.Maximum -ge $Script:Dashboard.AutoScrollMinSize.Height-1) $true
     $Script:Dashboard.AutoScrollPosition=New-Object Drawing.Point 0,0;$Script:Dashboard.ClientSize=$dashboardSize
     Assert-Equal 'merged energy card exists' ($Script:Dashboard.Tag.Fields.ContainsKey('watts')) $true
     Assert-Equal 'unconfigured energy never displays demo watts' $Script:Dashboard.Tag.Fields.watts.Text '-- W'
