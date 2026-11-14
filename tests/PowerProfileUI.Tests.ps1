@@ -57,7 +57,15 @@ try {
     foreach($item in $Script:Dashboard.Tag.MoreMenu.Items){$item.PerformClick()}
     Assert-Equal 'main window routes all actions to shared tray handlers' ($dashboardInvoked -join ',') 'Auto,Idle,Balanced,Game,Settings,Logs,Workstation,PauseWorkstation,Legacy,Exit'
     Assert-Equal 'auto state is visible on main button' $Script:Dashboard.Tag.Actions.Auto.Text '自动切换 · 开'
-    Assert-Equal 'main controls fit client area' (@($Script:Dashboard.Controls | Where-Object {$_.Bottom -gt $Script:Dashboard.ClientSize.Height -or $_.Right -gt $Script:Dashboard.ClientSize.Width}).Count) 0
+    Assert-Equal 'main controls fit accessible scroll canvas' (@($Script:Dashboard.Controls | Where-Object {$_.Bottom -gt $Script:Dashboard.DisplayRectangle.Height -or $_.Right -gt $Script:Dashboard.DisplayRectangle.Width}).Count) 0
+    Assert-Equal 'dashboard remains accessible on short screens' ($Script:Dashboard.AutoScroll -and $Script:Dashboard.AutoScrollMinSize.Height -ge 804) $true
+    $dashboardSize=$Script:Dashboard.ClientSize
+    $Script:Dashboard.ClientSize=New-Object Drawing.Size 500,540
+    [Windows.Forms.Application]::DoEvents()
+    $lowest=@($Script:Dashboard.Controls | Sort-Object Bottom -Descending)[0]
+    $Script:Dashboard.ScrollControlIntoView($lowest);[Windows.Forms.Application]::DoEvents()
+    Assert-Equal 'short-screen dashboard can scroll to its last control' ($Script:Dashboard.AutoScrollPosition.Y -lt 0 -and $lowest.Bottom -le $Script:Dashboard.ClientSize.Height) $true
+    $Script:Dashboard.AutoScrollPosition=New-Object Drawing.Point 0,0;$Script:Dashboard.ClientSize=$dashboardSize
     Assert-Equal 'merged energy card exists' ($Script:Dashboard.Tag.Fields.ContainsKey('watts')) $true
     Assert-Equal 'unconfigured energy never displays demo watts' $Script:Dashboard.Tag.Fields.watts.Text '-- W'
     Show-EnergyDetails
@@ -143,7 +151,7 @@ try {
     Assert-Equal 'stored period cost survives stale live readings' $Script:EnergyDetails.Tag.Fields.dayFee.Text '¥0.35'
     $energyForm=$Script:EnergyDetails
     foreach($parent in @($energyForm)+@($energyForm.Controls | Where-Object {$_ -is [Windows.Forms.Panel]})){
-        Assert-Equal 'energy controls fit their parent' (@($parent.Controls | Where-Object {$_.Bottom -gt $parent.ClientSize.Height -or $_.Right -gt $parent.ClientSize.Width}).Count) 0
+        Assert-Equal 'energy controls fit accessible parent canvas' (@($parent.Controls | Where-Object {$_.Bottom -gt $parent.DisplayRectangle.Height -or $_.Right -gt $parent.DisplayRectangle.Width}).Count) 0
         $controls=@($parent.Controls | Where-Object {$_.Visible})
         for($a=0;$a -lt $controls.Count;$a++){for($b=$a+1;$b -lt $controls.Count;$b++){if($controls[$a].Bounds.IntersectsWith($controls[$b].Bounds)){throw "Overlapping energy controls: $($controls[$a].Text) / $($controls[$b].Text)"}}}
     }

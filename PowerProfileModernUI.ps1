@@ -87,6 +87,7 @@ function Initialize-ModernForm {
     param($Form,[string]$Title,[int]$Width,[int]$Height)
     $Form.Text=$Title;$Form.Font=$Script:ModernFont
     $Form.ClientSize=New-Object Drawing.Size $Width,$Height
+    $Form.AutoScroll=$true;$Form.AutoScrollMinSize=New-Object Drawing.Size $Width,$Height
     $Form.BackColor=[Drawing.Color]::FromArgb(250,250,250)
     $Form.AutoScaleMode='Dpi';$Form.StartPosition='CenterScreen'
     $Form.FormBorderStyle='FixedDialog';$Form.MaximizeBox=$false;$Form.MinimizeBox=$false
