@@ -307,20 +307,22 @@ function Show-ModernSettings {
     $form=New-Object Windows.Forms.Form
     Initialize-ModernForm $form 'PowerProfile · 设置' 480 480
     $tabs=New-Object Windows.Forms.TabControl;$tabs.SetBounds(12,12,456,412)
-    $general=New-Object Windows.Forms.TabPage;$general.Text='常规'
+    $general=New-Object Windows.Forms.TabPage;$general.Text='常用设置'
     $plan=New-Object Windows.Forms.TabPage;$plan.Text='省电计划'
-    $protect=New-Object Windows.Forms.TabPage;$protect.Text='应用保护'
-    $smart=New-Object Windows.Forms.TabPage;$smart.Text='自动切换'
-    foreach($page in @($general,$plan,$smart,$protect)){$page.BackColor=$form.BackColor;$tabs.TabPages.Add($page)}
+    $smart=New-Object Windows.Forms.TabPage;$smart.Text='高级与规则'
+    foreach($page in @($general,$plan,$smart)){$page.BackColor=$form.BackColor;$tabs.TabPages.Add($page)}
     $form.Controls.Add($tabs)
     $toast=New-Object Windows.Forms.CheckBox;$toast.Text='切换时显示简短提示';$toast.Checked=(Get-ModernUIOptions).toastEnabled;$toast.SetBounds(18,18,350,26);$general.Controls.Add($toast)
-    $general.Controls.Add((New-ModernLabel '托盘左键：运行状态；右键：快捷菜单' 18 58 405))
-    $general.Controls.Add((New-ModernLabel '关闭窗口停止 CPU/GPU 采样；已连接插座继续累计。' 18 90 405))
-    $advanced=New-Object Windows.Forms.Button;$advanced.Text='档位与自动检测设置...';$advanced.SetBounds(18,132,240,32);$general.Controls.Add($advanced)
+    $general.Controls.Add((New-ModernLabel '性能档位' 18 66 405))
+    $advanced=New-Object Windows.Forms.Button;$advanced.Text='调整档位与检测参数…';$advanced.SetBounds(18,100,240,32);$general.Controls.Add($advanced)
     $advanced.Add_Click({Show-Settings})
-    $legacy=New-Object Windows.Forms.Button;$legacy.Text='切换为旧版';$legacy.SetBounds(18,181,180,32);$general.Controls.Add($legacy)
+    $general.Controls.Add((New-ModernLabel '集中调整三档频率、检测间隔和手动锁定。' 18 145 410))
+    $general.Controls.Add((New-ModernLabel '附加省电的日期、时段与等待条件在“省电计划”。' 18 187 410))
+    $general.Controls.Add((New-ModernLabel '插座连接、电价及用电记录在“电费与用电”。' 18 229 410))
+    $general.Controls.Add((New-ModernLabel '关闭看板后，插座监测仍在托盘后台运行。' 18 271 410))
+    $legacy=New-Object Windows.Forms.Button;$legacy.Text='切换为旧版';$legacy.SetBounds(18,280,180,32);$smart.Controls.Add($legacy)
     $legacy.Add_Click({Start-TrayVersionSwitch $ScriptDir 'Legacy'})
-    $general.Controls.Add((New-ModernLabel '旧版代码与上线前配置独立保存，可随时返回。' 18 232 410))
+    $smart.Controls.Add((New-ModernLabel '旧版代码与配置独立保存，可随时返回。' 18 327 410))
     $w=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
     $enabled=New-Object Windows.Forms.CheckBox;$enabled.Text='启用工作时段附加省电';$enabled.Checked=$w.enabled;$enabled.SetBounds(18,15,370,26);$plan.Controls.Add($enabled)
     $plan.Controls.Add((New-ModernLabel '生效日期' 18 57 130))
@@ -348,16 +350,14 @@ function Show-ModernSettings {
     $timeHint=New-ModernLabel '' 18 302 410;$timeHint.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$plan.Controls.Add($timeHint)
     $y=330
     foreach($text in @('游戏、高负载和手动档位始终优先','保留 C-state 等稳定参数')){$plan.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=26}
-    $y=22
-    foreach($text in @('已恢复原来的游戏检测切换方案','日常静音，不按普通 CPU / GPU 占用升档','确认游戏：进入游戏档','退出游戏：沿用原确认次数，回到静音','均衡保留，可从托盘或概览手动选择','手动选档优先；自动检测间隔保持原设置','深度省电仍需满足离开和严格低负载条件')){$smart.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38}
+    $y=18
+    foreach($text in @('运行规则 · 仅作说明','日常静音，确认游戏后进入游戏档','退出游戏：沿用原确认次数，回到静音','手动档位优先；均衡档仍可手动选择','附加省电：仅离开电脑且持续低负载时进入','游戏、应用负载或检查失败时阻止附加省电')){$smart.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=34}
+    $protection=New-ModernLabel '查看具体负载保护条件（悬停）' 18 228 410;$protection.ForeColor=[Drawing.Color]::FromArgb(91,107,118);$smart.Controls.Add($protection)
+    $Script:DashboardTip.SetToolTip($protection,"游戏主体进程存在时阻止附加省电。`r`nCPU 总占用 ≥25%、单进程 ≥10%，或占满 ≥70% 一核算力时阻止。`r`n任一 GPU 引擎 ≥15% 时阻止；检查失败不进入，低负载需持续确认。`r`n保留 C-state 等稳定参数。")
     $saveStatus=New-ModernLabel '' 12 440 345;$saveStatus.Height=32;$saveStatus.ForeColor=[Drawing.Color]::FromArgb(174,63,66);$saveStatus.AutoEllipsis=$true;$form.Controls.Add($saveStatus)
     $form.Tag=@{Plan=@{Enabled=$enabled;Schedule=$schedule;Away=$away;AllDay=$allDay;Start=$start;End=$end;TimeHint=$timeHint;Frequency=$frequency;Quiet=$quiet};Toast=$toast;SettingsFile=[IO.Path]::GetFullPath($SettingsPath);Root=[IO.Path]::GetFullPath($ScriptDir);SaveStatus=$saveStatus;LastSaveError=''}
     $allDay.Add_CheckedChanged({param($sender,$eventArgs) Update-WorkstationTimeControls $sender.FindForm()})
     Update-WorkstationTimeControls $form
-    $y=18
-    foreach($text in @('游戏主体进程存在时，禁止附加省电','暂不添加剪辑、建模软件进程名单','CPU 总占用 ≥25% 或单进程 ≥10% 阻止','单进程占用 ≥70% 的一核算力也阻止','任一 GPU 引擎 ≥15% 时阻止','检查失败不进入；低负载需连续两次确认')) {
-        $protect.Controls.Add((New-ModernLabel $text 18 $y 410));$y+=38
-    }
     $save=New-Object Windows.Forms.Button;$save.Text='保存';$save.SetBounds(368,440,100,30);$form.Controls.Add($save)
     $save.Add_Click({
         param($sender,$eventArgs)

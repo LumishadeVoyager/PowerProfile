@@ -721,12 +721,12 @@ function Open-ProfileLog {
 function Show-Settings {
     param([switch]$ReturnForm)
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = 'PowerProfile 设置'
+    $form.Text = 'PowerProfile · 档位与检测参数'
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
-    $form.ClientSize = New-Object System.Drawing.Size 560, 728
+    $form.ClientSize = New-Object System.Drawing.Size 560, 510
     $form.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
     $form.TopMost = $true
     $form.BackColor = [System.Drawing.Color]::FromArgb(247, 248, 250)
@@ -739,20 +739,23 @@ function Show-Settings {
     $tip.ReshowDelay = 120
 
     $title = New-Object System.Windows.Forms.Label
-    $title.Text = 'PowerProfile 设置'
+    $title.Text = '档位与检测参数'
     $title.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 16, ([System.Drawing.FontStyle]::Bold)
     $title.Location = New-Object System.Drawing.Point 18, 14
     $title.Size = New-Object System.Drawing.Size 260, 32
     $form.Controls.Add($title)
 
     $subtitle = New-Object System.Windows.Forms.Label
-    $subtitle.Text = '模式频率与自动策略'
+    $subtitle.Text = '分别调整性能上限与检测节奏'
     $subtitle.ForeColor = [System.Drawing.Color]::FromArgb(96, 103, 112)
     $subtitle.Location = New-Object System.Drawing.Point 20, 48
     $subtitle.Size = New-Object System.Drawing.Size 260, 22
     $form.Controls.Add($subtitle)
 
-    $y = 82
+    $parameterTabs=New-Object Windows.Forms.TabControl;$parameterTabs.SetBounds(18,80,524,374);$form.Controls.Add($parameterTabs)
+    $modePage=New-Object Windows.Forms.TabPage;$modePage.Text='性能档位';$parameterTabs.TabPages.Add($modePage)
+    $detectionPage=New-Object Windows.Forms.TabPage;$detectionPage.Text='检测与提示';$parameterTabs.TabPages.Add($detectionPage)
+    $y = 12
     foreach ($modeKey in 'Idle','Balanced','Game') {
         $color = $ModeColors[$modeKey]
         $modeData = $work.modes[$modeKey]
@@ -761,10 +764,10 @@ function Show-Settings {
         $grp.Text = "  $modeKey  "
         $grp.ForeColor = $color
         $grp.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 10, ([System.Drawing.FontStyle]::Bold)
-        $grp.Location = New-Object System.Drawing.Point 18, $y
-        $grp.Size = New-Object System.Drawing.Size 524, 96
+        $grp.Location = New-Object System.Drawing.Point 10, $y
+        $grp.Size = New-Object System.Drawing.Size 492, 96
         $grp.BackColor = [System.Drawing.Color]::White
-        $form.Controls.Add($grp)
+        $modePage.Controls.Add($grp)
 
         $lblName = New-Object System.Windows.Forms.Label
         $lblName.Text = '模式名称:'
@@ -789,27 +792,11 @@ function Show-Settings {
         $lblFreq.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
         $grp.Controls.Add($lblFreq)
 
-        $freqCombo = New-PresetCombo -Options (Get-FrequencyPresets $modeKey) -CurrentValue ([double]$modeData.freqMax) -Width 250
+        $freqCombo = New-PresetCombo -Options (Get-FrequencyPresets $modeKey) -CurrentValue ([double]$modeData.freqMax) -Width 370
         $freqCombo.Location = New-Object System.Drawing.Point 92, 58
         $grp.Controls.Add($freqCombo)
         $tip.SetToolTip($freqCombo, '选择一个预设频率上限。无上限会交给 Windows/HWP 满血调度。')
 
-        $lblCurrent = New-Object System.Windows.Forms.Label
-        $lblCurrent.Text = "当前: $(Format-Freq $modeData.freqMax)"
-        $lblCurrent.Location = New-Object System.Drawing.Point 360, 59
-        $lblCurrent.Size = New-Object System.Drawing.Size 140, 24
-        $lblCurrent.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
-        $lblCurrent.ForeColor = [System.Drawing.Color]::FromArgb(96, 103, 112)
-        $grp.Controls.Add($lblCurrent)
-        $freqCombo.Add_SelectedIndexChanged({
-            param($sender, $e)
-            $value = [int](Get-PresetValue $sender)
-            foreach ($c in $sender.Parent.Controls) {
-                if ($c -is [System.Windows.Forms.Label] -and $c.Text.StartsWith('当前:')) {
-                    $c.Text = "当前: $(Format-Freq $value)"
-                }
-            }
-        })
 
         $controls[$modeKey] = @{
             NameBox = $tbName
@@ -819,12 +806,12 @@ function Show-Settings {
     }
 
     $grpOther = New-Object System.Windows.Forms.GroupBox
-    $grpOther.Text = '  其他设置  '
+    $grpOther.Text = '  检测、手动锁定与提示  '
     $grpOther.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 10, ([System.Drawing.FontStyle]::Bold)
-    $grpOther.Location = New-Object System.Drawing.Point 18, $y
-    $grpOther.Size = New-Object System.Drawing.Size 524, 252
+    $grpOther.Location = New-Object System.Drawing.Point 10, 12
+    $grpOther.Size = New-Object System.Drawing.Size 492, 252
     $grpOther.BackColor = [System.Drawing.Color]::White
-    $form.Controls.Add($grpOther)
+    $detectionPage.Controls.Add($grpOther)
 
     $autoOptions = @(
         (New-Preset '灵敏: 每 5 秒检测' 5),
@@ -881,7 +868,7 @@ function Show-Settings {
         $lbl.Font = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
         $Parent.Controls.Add($lbl)
 
-        $combo = New-PresetCombo -Options $Options -CurrentValue $CurrentValue -Width 350
+        $combo = New-PresetCombo -Options $Options -CurrentValue $CurrentValue -Width 322
         $combo.Location = New-Object System.Drawing.Point ($X + 128), ($Y - 3)
         $Parent.Controls.Add($combo)
         $tip.SetToolTip($combo, $Tooltip)
@@ -895,7 +882,7 @@ function Show-Settings {
     $cmbQuiet = Add-SettingRow $grpOther '游戏空闲静音' $quietOptions ([double]$work.gameIdleQuietMinutes) 20 172 '仅在没有有效游戏进程或负载信号时，无输入多久后切到静音。'
     $cmbExit = Add-SettingRow $grpOther '退出防抖' $exitOptions ([double]$work.gameExitMissCount) 20 206 '游戏结束后连续多少次无游戏才切回静音。'
 
-    $y += 264
+    $y = 466
 
     $btnReset = New-Object System.Windows.Forms.Button
     $btnReset.Text = '恢复默认'

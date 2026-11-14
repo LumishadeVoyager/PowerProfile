@@ -43,6 +43,31 @@ try {
     $h.Points[3].InvalidAfter=$true
     [ProfileEnergyService]::AddSample($h,$at.AddSeconds(500),500)
     Assert 'failed poll also breaks short-gap energy integration' ($h.Days['2026-10-09'].Seconds -eq 90)
+    $usage=New-Object ProfileEnergyHistory
+    $usage.Points=New-Object 'Collections.Generic.List[ProfileEnergyPoint]'
+    $usage.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
+    [ProfileEnergyService]::AddSample($usage,$at,100)
+    [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(60),200)
+    Assert 'awake usage splits at China midnight without counting prior time' ($usage.Days['2026-10-08'].Seconds -eq 30 -and $usage.Days['2026-10-09'].Seconds -eq 30)
+    Assert '150W crossing is interpolated and split at midnight' ($usage.Days['2026-10-08'].HighPowerSeconds -eq 0 -and $usage.Days['2026-10-09'].HighPowerSeconds -eq 30)
+    [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(120),100)
+    Assert 'falling power crossing counts only high-power fraction' ($usage.Days['2026-10-09'].HighPowerSeconds -eq 60 -and $usage.Days['2026-10-09'].HighPowerCoverageSeconds -eq 90)
+    [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(400),200)
+    Assert 'offline intervals add neither awake nor high-power time' ($usage.Days['2026-10-09'].Seconds -eq 90 -and $usage.Days['2026-10-09'].HighPowerSeconds -eq 60)
+    $usage.Points[$usage.Points.Count-1].InvalidAfter=$true
+    [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(460),200)
+    Assert 'failed reads break usage and high-power integration' ($usage.Days['2026-10-09'].HighPowerCoverageSeconds -eq 90)
+    [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(520),150)
+    [ProfileEnergyService]::AddSample($usage,$at.AddSeconds(580),150)
+    Assert 'threshold is inclusive and high-power time never exceeds awake time' ($usage.Days['2026-10-09'].HighPowerSeconds -eq 180 -and $usage.Days['2026-10-09'].Seconds -eq 210)
+    Assert 'legacy days have unknown high-power duration rather than zero' ($null -eq (New-Object ProfileEnergyDay).HighPowerSeconds)
+    $flags=[Reflection.BindingFlags]'Instance,NonPublic'
+    $serviceHistory=[ProfileEnergyService].GetField('history',$flags).GetValue($Script:EnergyService)
+    [ProfileEnergyService]::AddSample($serviceHistory,$at,100)
+    $powerEvent=New-Object Microsoft.Win32.PowerModeChangedEventArgs ([Microsoft.Win32.PowerModes]::Suspend)
+    [void][ProfileEnergyService].GetMethod('PowerModeChanged',$flags).Invoke($Script:EnergyService,@($null,$powerEvent.PSObject.BaseObject))
+    [ProfileEnergyService]::AddSample($serviceHistory,$at.AddSeconds(60),200)
+    Assert 'short suspend breaks usage even below the ordinary gap timeout' ($serviceHistory.Points[0].InvalidAfter -and $serviceHistory.Days.Count -eq 0)
     $periods=New-Object ProfileEnergyHistory;$periods.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
     foreach($pair in @(@('2025-12-28',100),@('2025-12-29',1),@('2025-12-31',2),@('2026-01-01',3),@('2026-01-04',4),@('2026-01-05',5))){$periods.Days[$pair[0]]=New-Object ProfileEnergyDay;$periods.Days[$pair[0]].KWh=$pair[1];$periods.Days[$pair[0]].Seconds=3600}
     $report=[ProfileEnergyService]::Summarize($periods,[decimal]0.7,([DateTime]'2026-01-04T04:00:00Z'))
@@ -85,6 +110,7 @@ try {
     $day=[TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow,'China Standard Time').Date.AddDays(-1).ToString('yyyy-MM-dd')
     $local=@{Device='192.168.1.254';Points=@();Days=@{}}
     $local.Days[$day]=@{KWh=2;Seconds=3600}
+    $local.Days[$day].HighPowerSeconds=600;$local.Days[$day].HighPowerCoverageSeconds=1200
     [IO.File]::WriteAllText((Join-Path $ScriptDir 'energy.history.json'),($local|ConvertTo-Json -Depth 5))
     $Script:EnergyService=New-Object ProfileEnergyService $ScriptDir,$false
     $cloud=@{DeviceId=12345;Model='cuco.plug.v3';Days=@{};Multiplier=0.01;Query='11.1:stat_day'}
@@ -92,6 +118,7 @@ try {
     [void]$Script:EnergyService.ImportCloudHistory(($cloud|ConvertTo-Json -Depth 5))
     Assert 'cloud complete day replaces local estimate without double counting' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)
     Assert 'cloud provenance survives reporting' ($Script:EnergyService.GetSnapshot().Days[$day].Source -eq 'MiHome')
+    Assert 'cloud kWh replacement preserves local awake and high-power statistics' ($Script:EnergyService.GetSnapshot().UsageDays[$day].Seconds -eq 3600 -and $Script:EnergyService.GetSnapshot().UsageDays[$day].HighPowerSeconds -eq 600)
     Assert 'original local integration remains available' ((Get-Content (Join-Path $ScriptDir 'energy.history.json') -Raw|ConvertFrom-Json).Days.$day.KWh -eq 2)
     [void]$Script:EnergyService.ImportCloudHistory(($cloud|ConvertTo-Json -Depth 5))
     Assert 'repeated imports remain idempotent' ($Script:EnergyService.GetSnapshot().Days[$day].KWh -eq 1.5)

@@ -12,9 +12,14 @@ try {
     'corrupt' | Set-Content (Join-Path $testRoot 'tray_version.txt')
     Assert-Equal 'invalid selector fails to known version' (Get-SelectedTrayVersion $testRoot) 'Modern'
     Assert-Equal 'legacy path is independent' (Get-TrayVersionPath $project Legacy) (Join-Path $project 'legacy\PowerProfileTray.ps1')
-    $legacyHashes=@{'PowerProfile.ps1'='EB027A874BB108818278CF186398C7E6D2C359FD3E53E2B8667B0891EF30A2CC';'PowerProfileLogic.ps1'='CB77219C7FBC41807DB823D9DFD237D1FFBC73C73E0531C4891FB8260D8FBE0F';'PowerProfileDetection.ps1'='764BE1BDAFD2064189EAD87FC3ED11C1D124A8EF48C44B45D7759024F261219D'}
+    $legacyHashes=@{'PowerProfile.ps1'='C20E87B2D7D7ED078549737F18C83553C0FA24A6E19DD82968D931E84D1A6047';'PowerProfileLogic.ps1'='CB77219C7FBC41807DB823D9DFD237D1FFBC73C73E0531C4891FB8260D8FBE0F';'PowerProfileDetection.ps1'='764BE1BDAFD2064189EAD87FC3ED11C1D124A8EF48C44B45D7759024F261219D'}
     foreach($file in $legacyHashes.Keys) {
-        Assert-Equal "legacy core preserved: $file" (Get-FileHash (Join-Path $project ('legacy\'+$file))).Hash $legacyHashes[$file]
+        # Git checkouts may use LF or CRLF; preserve the code hash independent of that setting.
+        $bytes=[IO.File]::ReadAllBytes((Join-Path $project ('legacy\'+$file)))
+        $canonical=[Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString($bytes)).Replace("`r`n","`n"))
+        $hash=[Security.Cryptography.SHA256]::Create()
+        try{$actual=[BitConverter]::ToString($hash.ComputeHash($canonical)).Replace('-','')}finally{$hash.Dispose()}
+        Assert-Equal "legacy core preserved: $file" $actual $legacyHashes[$file]
     }
     $ScriptDir=$project;$SettingsPath=Join-Path $testRoot 'settings.json'
     Copy-Item (Join-Path $project 'settings.example.json') $SettingsPath
@@ -99,10 +104,47 @@ try {
     Assert-Equal 'monthly history exposes six calendar months' $Script:EnergyDetails.Tag.DailyGrid.Rows.Count 6
     Assert-Equal 'monthly row uses current China calendar month' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[0].Value $localDay.Substring(0,7)
     $Script:EnergyDetails.Tag.Group.SelectedIndex=0
+    $dailyFixture.Days[$localDay].KWh=0.5
+    $dailyFixture.Days[$localDay].HighPowerSeconds=600;$dailyFixture.Days[$localDay].HighPowerCoverageSeconds=1800
+    $previousDay=([DateTime]::ParseExact($localDay,'yyyy-MM-dd',$null)).AddDays(-1).ToString('yyyy-MM-dd')
+    $dailyFixture.Days[$previousDay]=New-Object ProfileEnergyDay
+    $dailyFixture.Days[$previousDay].KWh=1.5;$dailyFixture.Days[$previousDay].Source='MiHome'
+    $displayState=[ProfileEnergyService]::Summarize($dailyFixture,[decimal]0.7,[DateTime]::UtcNow)
+    $displayState.Configured=$true;$displayState.Status='已连接';$displayState.On=$true;$displayState.Watts=140;$displayState.ObservedAt=[DateTime]::UtcNow
+    for($i=0;$i -lt 60;$i++){
+        $point=New-Object ProfileEnergyPoint;$point.Time=[DateTime]::UtcNow.AddMinutes(-59+$i);$point.Watts=60+($i%12)*9;$point.BreakBefore=($i -eq 30);$displayState.Points.Add($point)
+    }
+    Update-EnergyDetails $displayState
+    Assert-Equal 'expense overview leads with measured period cost' $Script:EnergyDetails.Tag.Fields.dayFee.Text '¥0.35'
+    Assert-Equal 'expense overview retains energy alongside cost' $Script:EnergyDetails.Tag.Fields.today.Text '0.500 kWh'
+    Assert-Equal 'local coverage remains explicit' ($Script:EnergyDetails.Tag.Fields.dayCoverage.Text -like '*1.0 小时*') $true
+    Assert-Equal 'cloud and local coverage are distinguished' ((Get-EnergyPeriodCoverage $displayState $previousDay) -like '*米家 1 天*估算*') $true
+    Assert-Equal 'hourly reference uses current watts and fixed tariff' ($Script:EnergyDetails.Tag.Fields.hourCost.Text -like '*0.098*') $true
+    Assert-Equal 'usage column displays monitored awake hours' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[4].Value '1.00 h'
+    Assert-Equal 'high-power column uses 150W segment duration' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[5].Value '0.17 h*'
+    Assert-Equal 'legacy high-power duration stays unknown' $Script:EnergyDetails.Tag.DailyGrid.Rows[1].Cells[5].Value '未统计'
+    $latestPeriod=$Script:EnergyDetails.Tag.Timeline.Periods[$Script:EnergyDetails.Tag.Timeline.Periods.Count-1]
+    Assert-Equal 'combined timeline retains cost and two independent hour series' ($latestPeriod.Cost -eq 0.35 -and $latestPeriod.UsageHours -eq 1 -and [Math]::Abs($latestPeriod.HighHours-1.0/6) -lt 0.00001) $true
+    Assert-Equal 'partial high-power coverage remains disclosed' $latestPeriod.HighCoverageHours 0.5
+    $Script:EnergyDetails.Tag.ChartMode.SelectedIndex=1
+    Assert-Equal 'power view remains available alongside billing timeline' ($Script:EnergyDetails.Tag.Chart.Visible -and -not $Script:EnergyDetails.Tag.Timeline.Visible) $true
+    $Script:EnergyDetails.Tag.ChartMode.SelectedIndex=0
+    Set-EnergyChartRange $true
+    Assert-Equal 'chart period selection changes displayed range' $Script:EnergyDetails.Tag.Chart.Today $true
+    Set-EnergyChartRange $false
+    if($env:POWERPROFILE_UI_PREVIEW){
+        $bitmap=New-Object Drawing.Bitmap $Script:EnergyDetails.Width,$Script:EnergyDetails.Height
+        try{$Script:EnergyDetails.DrawToBitmap($bitmap,(New-Object Drawing.Rectangle 0,0,$bitmap.Width,$bitmap.Height));$bitmap.Save($env:POWERPROFILE_UI_PREVIEW)}finally{$bitmap.Dispose()}
+    }
+    $displayState.ObservedAt=[DateTime]::UtcNow.AddMinutes(-2)
+    Update-EnergyDetails $displayState
+    Assert-Equal 'stale readings do not appear as current power' $Script:EnergyDetails.Tag.Fields.watts.Text '-- W'
+    Assert-Equal 'stale readings do not produce hourly fee references' ($Script:EnergyDetails.Tag.Fields.hourCost.Text -notlike '*0.098*') $true
+    Assert-Equal 'stored period cost survives stale live readings' $Script:EnergyDetails.Tag.Fields.dayFee.Text '¥0.35'
     $energyForm=$Script:EnergyDetails
     foreach($parent in @($energyForm)+@($energyForm.Controls | Where-Object {$_ -is [Windows.Forms.Panel]})){
         Assert-Equal 'energy controls fit their parent' (@($parent.Controls | Where-Object {$_.Bottom -gt $parent.ClientSize.Height -or $_.Right -gt $parent.ClientSize.Width}).Count) 0
-        $controls=@($parent.Controls)
+        $controls=@($parent.Controls | Where-Object {$_.Visible})
         for($a=0;$a -lt $controls.Count;$a++){for($b=$a+1;$b -lt $controls.Count;$b++){if($controls[$a].Bounds.IntersectsWith($controls[$b].Bounds)){throw "Overlapping energy controls: $($controls[$a].Text) / $($controls[$b].Text)"}}}
     }
     Write-Host 'PASS energy sibling controls do not overlap'
@@ -170,7 +212,9 @@ try {
     $settingsForm=$Script:routedSettingsForm
     $settingsForm.Show();[Windows.Forms.Application]::DoEvents()
     $plan=$settingsForm.Tag.Plan
-    $policyTab=@($settingsForm.Controls | Where-Object {$_ -is [Windows.Forms.TabControl]})[0].TabPages | Where-Object {$_.Text -eq '自动切换'}
+    $settingsTabs=@($settingsForm.Controls | Where-Object {$_ -is [Windows.Forms.TabControl]})[0]
+    Assert-Equal 'settings consolidate explanatory pages into three tabs' $settingsTabs.TabPages.Count 3
+    $policyTab=$settingsTabs.TabPages | Where-Object {$_.Text -eq '高级与规则'}
     Assert-Equal 'original policy removes automatic workload threshold controls' (@($policyTab.Controls | Where-Object {$_ -is [Windows.Forms.ComboBox]}).Count) 0
     Assert-Equal 'policy page explains quiet default' (@($policyTab.Controls | Where-Object {$_.Text -like '日常静音*'}).Count) 1
     Assert-Equal 'schedule dropdown defaults to statutory working days' $plan.Schedule.SelectedItem.Value 'ChineseWorkdays'

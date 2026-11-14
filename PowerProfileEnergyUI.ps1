@@ -6,6 +6,7 @@ function Initialize-EnergyService {
     if($Script:EnergyService){return}
     if(-not ('ProfileEnergyService' -as [type])){
         $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileEnergy.cs'))
+        $source+="`r`n"+[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileEnergyTimeline.cs'))
         $store=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileFileIO.cs')).Replace('ProfileSnapshotIO','ProfileEnergyStore')
         # Compile the existing atomic snapshot implementation into this isolated adapter.
         $usings=([regex]::Matches(($store+"`r`n"+$source),'(?m)^using [^;]+;') | ForEach-Object {$_.Value} | Select-Object -Unique) -join "`r`n"
@@ -74,14 +75,32 @@ function Show-EnergyConnection {
     }catch{[void][Windows.Forms.MessageBox]::Show($_.Exception.GetBaseException().Message,'保存失败')}}.GetNewClosure())
     [void]$form.ShowDialog();$token.Clear();if($form.Icon){$form.Icon.Dispose()};$form.Dispose()
 }
+function Get-EnergyPeriodCoverage($State,[string]$Start){
+    $cloudDays=0;$seconds=0.0
+    foreach($item in $State.Days.GetEnumerator()){
+        if([string]::CompareOrdinal($item.Key,$Start) -ge 0 -and [string]::CompareOrdinal($item.Key,$State.LocalDay) -le 0){
+            if($item.Value.Source -eq 'MiHome'){$cloudDays++}else{$seconds+=$item.Value.Seconds}
+        }
+    }
+    $local=if($seconds -lt 3600){'{0:N0} 分钟' -f ($seconds/60)}else{'{0:N1} 小时' -f ($seconds/3600)}
+    if($cloudDays -gt 0){if($seconds -gt 0){return "米家 $cloudDays 天 + 估算 $local"};return "米家历史 · $cloudDays 天"}
+    if($seconds -gt 0){return "本机估算 · 已采集 $local"}
+    return '尚无连续采样 · 等待累计'
+}
 function Update-EnergyDetails {
+    param($State=$null)
     if(-not $Script:EnergyDetails -or $Script:EnergyDetails.IsDisposed){return}
-    $state=$Script:EnergyService.GetSnapshot();$f=$Script:EnergyDetails.Tag.Fields
+    if($null -eq $State){$State=$Script:EnergyService.GetSnapshot()};$f=$Script:EnergyDetails.Tag.Fields
     $f.status.Text=Get-EnergyStatusText $state
     $fresh=$state.ObservedAt -ne [DateTime]::MinValue -and ([DateTime]::UtcNow-$state.ObservedAt).TotalSeconds -le 90 -and $state.Status -in @('已连接','功率读数未提供')
     $f.watts.Text=if($fresh -and $null -ne $state.Watts){'{0:N1} W' -f $state.Watts}else{'-- W'}
     $f.today.Text=Format-EnergyAmount $state.TodayKWh 'kWh';$f.week.Text=Format-EnergyAmount $state.WeekKWh 'kWh';$f.month.Text=Format-EnergyAmount $state.MonthKWh 'kWh';$f.fee.Text=Format-EnergyCost $state.MonthKWh $state.Price
     $f.price.Text=if($null -ne $state.Price){'固定电价：{0:N3} 元 / 度' -f $state.Price}else{'待设置电价'}
+    $f.status.ForeColor=if($fresh){[Drawing.Color]::FromArgb(32,125,101)}elseif($state.Configured){[Drawing.Color]::FromArgb(173,107,35)}else{[Drawing.Color]::FromArgb(111,122,132)}
+    $f.hourCost.Text=if($fresh -and $null -ne $state.Watts -and $null -ne $state.Price){'按当前功率 · 约 ¥{0:N3} / 小时' -f ($state.Watts/1000*$state.Price)}else{'有效采样后显示即时费用参考'}
+    $f.dayCoverage.Text=Get-EnergyPeriodCoverage $state $state.LocalDay
+    $f.weekCoverage.Text=Get-EnergyPeriodCoverage $state $state.WeekStart
+    $f.monthCoverage.Text=Get-EnergyPeriodCoverage $state $state.MonthStart
     $f.dayFee.Text=Format-EnergyCost $state.TodayKWh $state.Price
     $f.weekFee.Text=Format-EnergyCost $state.WeekKWh $state.Price
     $Script:DashboardTip.SetToolTip($f.week,"北京时间 $($state.WeekStart) 至 $($state.LocalDay)；周一开始，已采集 $([Math]::Round($state.WeekSeconds/3600,1)) 小时。")
@@ -89,8 +108,8 @@ function Update-EnergyDetails {
     $f.hint.Text=if($state.Configured){$state.Status}else{'尚未连接 · 点击“连接与电价”设置插座'}
     $Script:DashboardTip.SetToolTip($f.hint,$state.Status)
     $hasCloud=@($state.Days.Values | Where-Object {$_.Source -eq 'MiHome'}).Count -gt 0
-    $f.coverage.Text=if($hasCloud){'完整日期优先米家历史；其他日期为本机估算，缺失日期不补值'}else{'用电量、电费为已采集片段的估算；可通过米家历史补录'}
-    $f.updated.Text=if($state.ObservedAt -ne [DateTime]::MinValue){"采样 $($state.ObservedAt.ToLocalTime().ToString('HH:mm:ss')) · 每分钟更新"}else{'连接后开始累计，无接入前历史数据'}
+    $f.coverage.Text='费用：米家历史优先，其余采样估算；使用：唤醒且监测正常；高功耗 ≥150 W（* 为部分覆盖）。'
+    $f.updated.Text=if($state.ObservedAt -ne [DateTime]::MinValue){"采样 $([TimeZoneInfo]::ConvertTimeFromUtc($state.ObservedAt,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')).ToString('HH:mm:ss')) · 每分钟更新"}else{'连接插座后开始采样'}
     $f.switch.Enabled=$fresh -and $null -ne $state.On -and -not $state.Busy
     $f.switch.Text=if($state.On -eq $false){'开启插座'}else{'关闭插座'};$f.refresh.Enabled=$state.Configured -and -not $state.Busy
     $Script:EnergyDetails.Tag.Chart.Points=$state.Points;$Script:EnergyDetails.Tag.Chart.Invalidate()
@@ -106,7 +125,15 @@ function Update-EnergyDailyRows {
     if($tag.DailyKey -eq $key){return};$tag.DailyKey=$key
     $grid=$tag.DailyGrid;$selectedDate=if($grid.CurrentRow){[string]$grid.CurrentRow.Cells[0].Value}else{''}
     $grid.Rows.Clear();$day=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
-    $totals=@{}
+    $totals=@{};$usage=@{};$periods=New-Object 'Collections.Generic.List[ProfileEnergyPeriod]'
+    foreach($item in $State.UsageDays.GetEnumerator()){
+        $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+        $start=switch($view){'Week'{$date.AddDays(-(([int]$date.DayOfWeek+6)%7))};'Month'{$date.AddDays(1-$date.Day)};default{$date}}
+        $groupKey=$start.ToString('yyyy-MM-dd')
+        if(-not $usage.ContainsKey($groupKey)){$usage[$groupKey]=@{Seconds=0.0;High=$null;Coverage=0.0}}
+        $usage[$groupKey].Seconds+=$item.Value.Seconds
+        if($null -ne $item.Value.HighPowerSeconds){$usage[$groupKey].High+=$item.Value.HighPowerSeconds;$usage[$groupKey].Coverage+=$item.Value.HighPowerCoverageSeconds}
+    }
     foreach($item in $State.Days.GetEnumerator()){
         $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
         $start=switch($view){'Week'{$date.AddDays(-(([int]$date.DayOfWeek+6)%7))};'Month'{$date.AddDays(1-$date.Day)};default{$date}}
@@ -123,11 +150,21 @@ function Update-EnergyDailyRows {
         $amount=if($null -ne $entry){Format-EnergyAmount $entry.KWh 'kWh'}else{'未采集'}
         $cost=if($null -ne $entry){Format-EnergyCost $entry.KWh $State.Price}else{'—'}
         $coverage=if($null -eq $entry){'—'}elseif($entry.CloudDays -gt 0){if($entry.LocalDays -gt 0){'历史 + 估算'}else{'米家历史'}}else{'{0:N1} 小时' -f ($entry.Seconds/3600)}
-        $index=$grid.Rows.Add([object[]]@($date,$amount,$cost,$coverage))
+        $u=$usage[$groupKey];$online=if($u -and $u.Seconds -gt 0){'{0:N2} h' -f ($u.Seconds/3600)}else{'未采集'}
+        $high=if($u -and $null -ne $u.High){('{0:N2} h' -f ($u.High/3600))+$(if($u.Coverage -lt $u.Seconds-0.5){'*'})}else{'未统计'}
+        $index=$grid.Rows.Add([object[]]@($date,$amount,$cost,$coverage,$online,$high))
+        $grid.Rows[$index].Cells[4].ToolTipText='电脑唤醒且监测正常的连续采样时长；断线、休眠及程序停止期间不补算。'
+        $grid.Rows[$index].Cells[5].ToolTipText=if($u -and $null -ne $u.High){'输入功率 ≥150 W；有效统计覆盖 {0:N2} 小时，旧记录未统计部分未知。' -f ($u.Coverage/3600)}else{'旧记录没有高功耗分段统计；不当作零。'}
+        $period=New-Object ProfileEnergyPeriod;$period.Label=if($view -eq 'Month'){$start.ToString('yy-MM')}else{$start.ToString('MM-dd')}
+        if($entry -and $null -ne $State.Price){$period.Cost=$entry.KWh*[double]$State.Price}
+        if($u -and $u.Seconds -gt 0){$period.UsageHours=$u.Seconds/3600}
+        if($u -and $null -ne $u.High){$period.HighHours=$u.High/3600;$period.HighCoverageHours=$u.Coverage/3600}
+        $periods.Insert(0,$period)
         $grid.Rows[$index].Cells[0].ToolTipText=if($view -eq 'Week'){"$groupKey 至 $($start.AddDays(6).ToString('yyyy-MM-dd'))（北京时间）；本周期截至今日"}elseif($view -eq 'Month'){"自然月 $date；本周期截至今日"}else{'北京时间日期'}
         if($null -eq $entry){$grid.Rows[$index].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(133,142,150)}
         if($date -eq $selectedDate){$grid.CurrentCell=$grid.Rows[$index].Cells[0]}
     }
+    if($tag.Timeline){$tag.Timeline.Periods=$periods;$tag.Timeline.Invalidate()}
 }
 function Update-EnergyHistoryRange {
     param($Form)
@@ -140,50 +177,72 @@ function Update-EnergyHistoryRange {
 function Show-EnergyDetails {
     Initialize-EnergyService
     if($Script:EnergyDetails -and -not $Script:EnergyDetails.IsDisposed){$Script:EnergyDetails.Show();[ProfileVisual]::ActivateDashboard($Script:EnergyDetails.Handle);return}
-    $form=New-Object Windows.Forms.Form;Initialize-ModernForm $form 'PowerProfile · 电脑用电' 560 810
+    $form=New-Object Windows.Forms.Form;Initialize-ModernForm $form 'PowerProfile · 电费与用电' 900 744
     $fields=@{}
-    $title=New-ModernLabel '电脑用电' 20 16 260;$title.Font=New-Object Drawing.Font 'Microsoft YaHei UI',14,([Drawing.FontStyle]::Bold);$title.Height=36;$form.Controls.Add($title)
-    $fields.status=New-ModernLabel '未连接' 320 23 220;$fields.status.TextAlign='TopRight';$fields.status.ForeColor=[Drawing.Color]::FromArgb(36,124,112);$form.Controls.Add($fields.status)
-    $form.Controls.Add((New-ModernLabel '米家智能插座 3 · 仅为电脑供电' 20 54 245))
-    $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds(12,92,536,104);$form.Controls.Add($card)
-    $powerCaption=New-ModernLabel '电源输入功率' 16 10 210;$powerCaption.Height=20;$card.Controls.Add($powerCaption);$fields.watts=New-ModernLabel '-- W' 16 32 240;$fields.watts.Font=New-Object Drawing.Font 'Segoe UI',24,([Drawing.FontStyle]::Bold);$fields.watts.Height=46;$fields.watts.ForeColor=[Drawing.Color]::FromArgb(39,106,159);$card.Controls.Add($fields.watts)
-    $meaning=New-ModernLabel '电脑 + 适配器 + 电池充电' 270 34 250;$meaning.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$card.Controls.Add($meaning)
-    $summary=New-Object Windows.Forms.Panel;$summary.BackColor=[Drawing.Color]::White;$summary.SetBounds(12,208,536,116);$form.Controls.Add($summary)
-    foreach($row in @(@('今日','today','dayFee',16),@('本周 · 周一起','week','weekFee',190),@('本月 · 自然月','month','fee',364))){
-        $caption=New-ModernLabel $row[0] $row[3] 11 156;$caption.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$summary.Controls.Add($caption)
-        $value=New-ModernLabel '等待累计' $row[3] 39 156;$value.Font=New-Object Drawing.Font 'Segoe UI',12,([Drawing.FontStyle]::Bold);$value.Height=29;$summary.Controls.Add($value);$fields[$row[1]]=$value
-        $cost=New-ModernLabel '等待累计' $row[3] 75 156;$cost.ForeColor=[Drawing.Color]::FromArgb(39,106,159);$summary.Controls.Add($cost);$fields[$row[2]]=$cost
+    $title=New-ModernLabel '电费与用电' 20 16 340;$title.Font=New-Object Drawing.Font 'Microsoft YaHei UI',17,([Drawing.FontStyle]::Bold);$title.Height=36;$form.Controls.Add($title)
+    $subtitle=New-ModernLabel '电脑专用插座 · 北京时间 · 固定电价估算' 22 57 530;$subtitle.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($subtitle)
+    $fields.status=New-ModernLabel '未连接' 620 22 260;$fields.status.TextAlign='MiddleRight';$form.Controls.Add($fields.status)
+    $fields.updated=New-ModernLabel '' 570 57 310;$fields.updated.TextAlign='MiddleRight';$fields.updated.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$form.Controls.Add($fields.updated)
+    $i=0
+    foreach($row in @(@('今日','today','dayFee','dayCoverage'),@('本周 · 周一起','week','weekFee','weekCoverage'),@('本月 · 自然月','month','fee','monthCoverage'))){
+        $card=New-Object Windows.Forms.Panel;$card.BackColor=[Drawing.Color]::White;$card.SetBounds((20+292*$i),96,276,142);$form.Controls.Add($card)
+        $caption=New-ModernLabel $row[0] 18 12 240;$caption.ForeColor=[Drawing.Color]::FromArgb(91,107,118);$card.Controls.Add($caption)
+        $cost=New-ModernLabel '等待累计' 16 39 244;$cost.Font=New-Object Drawing.Font 'Segoe UI',25,([Drawing.FontStyle]::Bold);$cost.Height=46;$cost.ForeColor=[Drawing.Color]::FromArgb(29,93,131);$card.Controls.Add($cost);$fields[$row[2]]=$cost
+        $value=New-ModernLabel '等待累计' 20 89 236;$value.Font=New-Object Drawing.Font 'Segoe UI',11;$value.Height=24;$card.Controls.Add($value);$fields[$row[1]]=$value
+        $coverage=New-ModernLabel '' 20 117 236;$coverage.Height=20;$coverage.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$coverage.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$card.Controls.Add($coverage);$fields[$row[3]]=$coverage
+        $i++
     }
-    $curve=New-Object Windows.Forms.Panel;$curve.BackColor=[Drawing.Color]::White;$curve.SetBounds(12,336,536,164);$form.Controls.Add($curve)
-    $curve.Controls.Add((New-ModernLabel '功率变化' 16 12 180));$chart=New-Object ProfileEnergyChart;$chart.Font=$Script:ModernFont;$chart.SetBounds(10,47,516,107);$curve.Controls.Add($chart)
-    $hour=New-EnergyButton '近 1 小时' 347 9 91;$today=New-EnergyButton '今日' 445 9 74;$curve.Controls.Add($hour);$curve.Controls.Add($today)
-    $hour.Add_Click({$Script:EnergyDetails.Tag.Chart.Today=$false;$Script:EnergyDetails.Tag.Chart.Invalidate()});$today.Add_Click({$Script:EnergyDetails.Tag.Chart.Today=$true;$Script:EnergyDetails.Tag.Chart.Invalidate()})
-    $daily=New-Object Windows.Forms.Panel;$daily.BackColor=[Drawing.Color]::White;$daily.SetBounds(12,512,536,202);$form.Controls.Add($daily)
-    $daily.Controls.Add((New-ModernLabel '用电明细' 16 12 180))
-    $group=New-WorkstationCombo $daily 250 9 105 @(@('Day','按日'),@('Week','按周'),@('Month','按月')) 'Day'
-    $range=New-WorkstationCombo $daily 370 9 150 @(@(7,'近 7 天'),@(30,'近 30 天'),@(90,'近 90 天')) 30
-    $grid=New-Object Windows.Forms.DataGridView;$grid.SetBounds(10,44,516,148);$grid.ReadOnly=$true;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AllowUserToResizeRows=$false;$grid.RowHeadersVisible=$false;$grid.MultiSelect=$false;$grid.SelectionMode='FullRowSelect';$grid.AutoSizeColumnsMode='Fill';$grid.BackgroundColor=[Drawing.Color]::White;$grid.BorderStyle='None';$grid.GridColor=[Drawing.Color]::FromArgb(234,239,242);$grid.EnableHeadersVisualStyles=$false;$grid.ColumnHeadersDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(244,247,249);$grid.ColumnHeadersDefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(91,107,118);$grid.ColumnHeadersDefaultCellStyle.WrapMode='False';$grid.ColumnHeadersHeight=28;$grid.ColumnHeadersHeightSizeMode='DisableResizing';$grid.RowTemplate.Height=25;$grid.DefaultCellStyle.SelectionBackColor=[Drawing.Color]::FromArgb(228,240,247);$grid.DefaultCellStyle.SelectionForeColor=[Drawing.Color]::FromArgb(42,55,67)
-    foreach($column in @(@('date','日期',130),@('amount','用电量',135),@('cost','估算电费',100),@('coverage','已采集',110))){$index=$grid.Columns.Add($column[0],$column[1]);$grid.Columns[$index].FillWeight=$column[2];$grid.Columns[$index].SortMode='NotSortable';if($index -gt 0){$grid.Columns[$index].DefaultCellStyle.Alignment='MiddleRight';$grid.Columns[$index].HeaderCell.Style.Alignment='MiddleRight'}}
+    $curve=New-Object Windows.Forms.Panel;$curve.BackColor=[Drawing.Color]::White;$curve.SetBounds(20,252,568,218);$form.Controls.Add($curve)
+    $curve.Controls.Add((New-ModernLabel '费用与使用趋势' 18 14 180))
+    $chart=New-Object ProfileEnergyChart;$chart.Font=New-Object Drawing.Font 'Segoe UI',8;$chart.SetBounds(10,57,548,151);$curve.Controls.Add($chart)
+    $timeline=New-Object ProfileEnergyTimeline;$timeline.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$timeline.SetBounds(10,57,548,151);$curve.Controls.Add($timeline);$chart.Visible=$false
+    $chartMode=New-WorkstationCombo $curve 210 12 134 @(@('History','费用与时长'),@('Power','实时功率')) 'History'
+    $chartMode.Add_SelectedIndexChanged({
+        if(-not $Script:EnergyDetails){return};$tag=$Script:EnergyDetails.Tag;$power=$tag.ChartMode.SelectedItem.Value -eq 'Power'
+        $tag.Chart.Visible=$power;$tag.Timeline.Visible=-not $power;$tag.HourButton.Visible=$power;$tag.TodayButton.Visible=$power
+    })
+    $hour=New-EnergyButton '近 1 小时' 350 12 112;$today=New-EnergyButton '今日' 470 12 80;$curve.Controls.Add($hour);$curve.Controls.Add($today)
+    $hour.Visible=$false;$today.Visible=$false
+    $hour.Add_Click({Set-EnergyChartRange $false});$today.Add_Click({Set-EnergyChartRange $true})
+    $meter=New-Object Windows.Forms.Panel;$meter.BackColor=[Drawing.Color]::White;$meter.SetBounds(602,252,278,218);$form.Controls.Add($meter)
+    $meter.Controls.Add((New-ModernLabel '实时输入功率' 18 14 242))
+    $fields.watts=New-ModernLabel '-- W' 16 45 244;$fields.watts.Font=New-Object Drawing.Font 'Segoe UI',30,([Drawing.FontStyle]::Bold);$fields.watts.Height=56;$fields.watts.ForeColor=[Drawing.Color]::FromArgb(29,93,131);$meter.Controls.Add($fields.watts)
+    $meaning=New-ModernLabel '含电脑、适配器损耗与电池充电' 18 108 242;$meaning.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$meaning.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$meter.Controls.Add($meaning)
+    $fields.price=New-ModernLabel '' 18 142 242;$meter.Controls.Add($fields.price)
+    $fields.hourCost=New-ModernLabel '' 18 174 242;$fields.hourCost.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$fields.hourCost.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$meter.Controls.Add($fields.hourCost)
+    $daily=New-Object Windows.Forms.Panel;$daily.BackColor=[Drawing.Color]::White;$daily.SetBounds(20,484,860,176);$form.Controls.Add($daily)
+    $daily.Controls.Add((New-ModernLabel '用电账目' 18 13 220))
+    $group=New-WorkstationCombo $daily 548 10 124 @(@('Day','按日'),@('Week','按周'),@('Month','按月')) 'Day'
+    $range=New-WorkstationCombo $daily 684 10 158 @(@(7,'近 7 天'),@(30,'近 30 天'),@(90,'近 90 天')) 30
+    $grid=New-Object Windows.Forms.DataGridView;$grid.SetBounds(12,48,836,116);$grid.ReadOnly=$true;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AllowUserToResizeRows=$false;$grid.RowHeadersVisible=$false;$grid.MultiSelect=$false;$grid.SelectionMode='FullRowSelect';$grid.AutoSizeColumnsMode='Fill';$grid.BackgroundColor=[Drawing.Color]::White;$grid.BorderStyle='None';$grid.GridColor=[Drawing.Color]::FromArgb(234,239,242);$grid.EnableHeadersVisualStyles=$false;$grid.ColumnHeadersDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(244,247,249);$grid.ColumnHeadersDefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(91,107,118);$grid.ColumnHeadersDefaultCellStyle.WrapMode='False';$grid.ColumnHeadersHeight=28;$grid.ColumnHeadersHeightSizeMode='DisableResizing';$grid.RowTemplate.Height=28;$grid.DefaultCellStyle.SelectionBackColor=[Drawing.Color]::FromArgb(228,240,247);$grid.DefaultCellStyle.SelectionForeColor=[Drawing.Color]::FromArgb(42,55,67);$grid.AlternatingRowsDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(249,251,252);$grid.CellBorderStyle='SingleHorizontal'
+    foreach($column in @(@('date','日期',125),@('amount','用电量',110),@('cost','电费',100),@('coverage','来源 / 覆盖',230),@('usage','使用时长',125),@('high','高功耗时长',140))){$index=$grid.Columns.Add($column[0],$column[1]);$grid.Columns[$index].FillWeight=$column[2];$grid.Columns[$index].SortMode='NotSortable';$grid.Columns[$index].DefaultCellStyle.Padding=New-Object Windows.Forms.Padding 8,0,8,0;if($index -gt 0){$grid.Columns[$index].DefaultCellStyle.Alignment='MiddleRight';$grid.Columns[$index].HeaderCell.Style.Alignment='MiddleRight'}}
+    $grid.Columns[4].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(32,139,111);$grid.Columns[5].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(181,105,26)
     $daily.Controls.Add($grid);$range.Add_SelectedIndexChanged({if($Script:EnergyDetails){$Script:EnergyDetails.Tag.DailyKey='';Update-EnergyDetails}})
     $group.Add_SelectedIndexChanged({if($Script:EnergyDetails){Update-EnergyHistoryRange $Script:EnergyDetails}})
-    $fields.price=New-ModernLabel '' 16 81 504;$fields.price.Height=20;$fields.price.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$card.Controls.Add($fields.price)
-    $fields.switch=New-EnergyButton '关闭插座' 284 770 124;$form.Controls.Add($fields.switch)
+    $fields.coverage=New-ModernLabel '' 22 668 856;$fields.coverage.Height=20;$fields.coverage.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$fields.coverage.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.coverage)
+    $fields.hint=New-ModernLabel '' 22 704 254;$fields.hint.Height=22;$fields.hint.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$fields.hint.AutoEllipsis=$true;$form.Controls.Add($fields.hint)
+    $setup=New-EnergyButton '连接与电价' 286 700 120;$form.Controls.Add($setup);$setup.Add_Click({Show-EnergyConnection;Update-EnergyDetails})
+    $cloudButton=New-EnergyButton '补录米家历史' 418 700 136;$form.Controls.Add($cloudButton);$cloudButton.Add_Click({Show-CloudHistory;Update-EnergyDetails})
+    $fields.refresh=New-EnergyButton '刷新数据' 566 700 100;$form.Controls.Add($fields.refresh);$fields.refresh.Add_Click({$Script:EnergyService.Refresh();Update-EnergyDetails})
+    $fields.switch=New-EnergyButton '关闭插座' 678 700 98;$form.Controls.Add($fields.switch)
     $fields.switch.Add_Click({
         $state=$Script:EnergyService.GetSnapshot();if(-not $state.Configured -or $state.Busy -or $null -eq $state.On){return}
         $on=-not $state.On
         $message=if($on){'确认开启电脑插座？'}else{'确认关闭电脑插座？这会切断适配器供电，电脑将转为电池供电。不会触发自动休眠。请确认电池可用，避免远程连接中断。'}
         if([Windows.Forms.MessageBox]::Show($message,'插座控制','YesNo','Question','Button2') -eq 'Yes'){$Script:EnergyService.SetSwitch($on);Update-EnergyDetails}
     })
-    $setup=New-EnergyButton '连接与电价' 18 770 136;$form.Controls.Add($setup);$setup.Add_Click({Show-EnergyConnection;Update-EnergyDetails})
-    $fields.refresh=New-EnergyButton '刷新' 164 770 92;$form.Controls.Add($fields.refresh);$fields.refresh.Add_Click({$Script:EnergyService.Refresh();Update-EnergyDetails})
-    $fields.coverage=New-ModernLabel '' 18 720 524;$fields.coverage.Height=20;$fields.coverage.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$fields.coverage.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.coverage)
-    $fields.updated=New-ModernLabel '' 18 743 250;$fields.updated.Height=20;$fields.updated.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$form.Controls.Add($fields.updated)
-    $cloudButton=New-EnergyButton '米家历史…' 284 742 124;$cloudButton.Height=26;$form.Controls.Add($cloudButton);$cloudButton.Add_Click({Show-CloudHistory;Update-EnergyDetails})
-    $fields.hint=New-ModernLabel '' 288 65 252;$fields.hint.Height=20;$fields.hint.AutoEllipsis=$true;$fields.hint.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($fields.hint)
-    $close=New-EnergyButton '关闭' 430 770 112;$form.Controls.Add($close);$close.Add_Click({$Script:EnergyDetails.Close()})
+    $close=New-EnergyButton '关闭' 788 700 92;$form.Controls.Add($close);$close.Add_Click({$Script:EnergyDetails.Close()})
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=1000;$timer.Add_Tick({try{Update-EnergyDetails}catch{Write-ProfileEvent 'ui.energy.refresh.failed' $_.Exception.Message 'ERROR'}})
-    $form.Tag=@{Fields=$fields;Chart=$chart;Timer=$timer;DailyGrid=$grid;Range=$range;Group=$group;DailyKey=''};$Script:EnergyDetails=$form
+    $form.Tag=@{Fields=$fields;Chart=$chart;Timeline=$timeline;ChartMode=$chartMode;Timer=$timer;DailyGrid=$grid;Range=$range;Group=$group;DailyKey='';HourButton=$hour;TodayButton=$today};$Script:EnergyDetails=$form
     $form.Add_FormClosed({param($sender,$args) $sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose();if($sender.Icon){$sender.Icon.Dispose()};$Script:EnergyDetails=$null})
+    Set-EnergyChartRange $false
     Update-EnergyDetails;$timer.Start();$form.Show();[ProfileVisual]::ActivateDashboard($form.Handle)
     Write-ProfileEvent 'ui.energy.open' '用电详情已打开' -Data @{handle=$form.Handle.ToInt64();historyView=$group.SelectedItem.Value}
+}
+function Set-EnergyChartRange([bool]$Today){
+    $tag=$Script:EnergyDetails.Tag;$tag.Chart.Today=$Today;$tag.Chart.Invalidate()
+    foreach($pair in @(@($tag.HourButton,(-not $Today)),@($tag.TodayButton,$Today))){
+        $pair[0].BackColor=if($pair[1]){[Drawing.Color]::FromArgb(228,240,247)}else{[Drawing.Color]::White}
+        $pair[0].ForeColor=if($pair[1]){[Drawing.Color]::FromArgb(29,93,131)}else{[Drawing.Color]::FromArgb(91,107,118)}
+    }
 }

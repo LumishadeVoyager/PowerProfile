@@ -15,15 +15,16 @@ using System.Windows.Forms;
 public sealed class ProfilePlugTransport {
     public uint DeviceId {get;private set;}
     static int messageId=new Random().Next(1,9000);
-    readonly string address; readonly byte[] token;
-    public ProfilePlugTransport(string address, string secret) {
+    readonly string address; readonly byte[] token; readonly uint expectedDeviceId;
+    public ProfilePlugTransport(string address, string secret):this(address,secret,0){}
+    public ProfilePlugTransport(string address, string secret,uint expectedDeviceId) {
         IPAddress ip;
         if(!IPAddress.TryParse(address,out ip) || ip.AddressFamily!=AddressFamily.InterNetwork ||
             !(ip.GetAddressBytes()[0]==10 || (ip.GetAddressBytes()[0]==192 && ip.GetAddressBytes()[1]==168) ||
               (ip.GetAddressBytes()[0]==172 && ip.GetAddressBytes()[1]>=16 && ip.GetAddressBytes()[1]<=31)))
             throw new ArgumentException("请填写插座的局域网 IPv4 地址。");
         if(secret==null || secret.Length!=32)throw new ArgumentException("设备 Token 必须为 32 位十六进制字符。");
-        this.address=address;token=new byte[16];
+        this.address=address;this.expectedDeviceId=expectedDeviceId;token=new byte[16];
         for(int i=0;i<16;i++)token[i]=byte.Parse(secret.Substring(i*2,2),NumberStyles.HexNumber,CultureInfo.InvariantCulture);
     }
     static byte[] Hash(byte[] bytes){using(var h=MD5.Create())return h.ComputeHash(bytes);}
@@ -49,7 +50,10 @@ public sealed class ProfilePlugTransport {
         using(var socket=new UdpClient()){socket.Connect(address,54321);socket.Client.ReceiveTimeout=3000;
             var hello=new byte[32];for(int i=4;i<32;i++)hello[i]=255;hello[0]=0x21;hello[1]=0x31;hello[3]=32;
             socket.Send(hello,hello.Length);var endpoint=new IPEndPoint(IPAddress.Any,0);byte[] response=socket.Receive(ref endpoint);
-            if(response.Length!=32 || response[0]!=0x21 || response[1]!=0x31)throw new InvalidDataException("设备未返回有效握手。");
+            if(response.Length!=32 || response[0]!=0x21 || response[1]!=0x31 || response[2]!=0 || response[3]!=32)throw new InvalidDataException("设备未返回有效握手。");
+            uint discoveredId=((uint)response[8]<<24)|((uint)response[9]<<16)|((uint)response[10]<<8)|response[11];
+            // Check identity before sending authenticated commands to a reused DHCP address.
+            if(expectedDeviceId!=0 && discoveredId!=expectedDeviceId)throw new InvalidDataException("插座 IP 已变化：当前地址属于其他设备，请在“连接与电价”更新插座 IP；历史记录已保留。");
             var header=Slice(response,0,16);for(int i=4;i<8;i++)header[i]=0;
             // Match device time, including devices without a correct wall clock.
             for(int i=15;i>=12;i--){if(++header[i]!=0)break;}
@@ -84,7 +88,7 @@ public sealed class ProfilePlugTransport {
 }
 
 public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} }
-public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} }
+public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} }
 public sealed class ProfileCloudHistory {public uint DeviceId {get;set;} public string Model {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} public string Query {get;set;} public double Multiplier {get;set;} public string FetchedAt {get;set;} }
 public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
@@ -93,9 +97,11 @@ public sealed class ProfileEnergySnapshot {
     public string Status="未连接 · 请设置插座";public decimal? Price;public double? TodayKWh,WeekKWh,MonthKWh;
     public double TodaySeconds,WeekSeconds,MonthSeconds;public string LocalDay,WeekStart,MonthStart;
     public Dictionary<string,ProfileEnergyDay> Days=new Dictionary<string,ProfileEnergyDay>();
+    public Dictionary<string,ProfileEnergyDay> UsageDays=new Dictionary<string,ProfileEnergyDay>();
     public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();
 }
 public sealed class ProfileEnergyService : IDisposable {
+    public const double HighPowerWatts=150;
     readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;
     ProfileEnergyConfig config;ProfileEnergyHistory history;ProfileCloudHistory cloud;ProfileEnergySnapshot snapshot=new ProfileEnergySnapshot();
     readonly Queue<string[]> events=new Queue<string[]>();
@@ -111,6 +117,12 @@ public sealed class ProfileEnergyService : IDisposable {
         try{cloud=Serializer().Deserialize<ProfileCloudHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.cloud.history.json")));ValidateCloud(cloud);}
         catch(FileNotFoundException){}catch{cloud=null;Event("energy.cloud.cache.failed","米家历史缓存无法读取；保留本机估算","WARN");}
         timer=new System.Threading.Timer(_=>Refresh(),null,Timeout.Infinite,Timeout.Infinite);if(snapshot.Configured && autoPoll)timer.Change(0,60000);
+        Microsoft.Win32.SystemEvents.PowerModeChanged+=PowerModeChanged;
+    }
+    void PowerModeChanged(object sender,Microsoft.Win32.PowerModeChangedEventArgs e){
+        if(e.Mode!=Microsoft.Win32.PowerModes.Suspend && e.Mode!=Microsoft.Win32.PowerModes.Resume)return;
+        lock(gate){if(disposed)return;if(history.Points.Count>0)history.Points[history.Points.Count-1].InvalidAfter=true;}
+        if(e.Mode==Microsoft.Win32.PowerModes.Resume && autoPoll)Refresh();
     }
     static JavaScriptSerializer Serializer(){return new JavaScriptSerializer{MaxJsonLength=4*1024*1024};}
     void Event(string code,string message,string level,string operation=null){lock(gate){if(events.Count>=100)events.Dequeue();events.Enqueue(new[]{code,message,level,operation??Guid.NewGuid().ToString()});}}
@@ -126,7 +138,7 @@ public sealed class ProfileEnergyService : IDisposable {
         uint deviceId=config.DeviceId;
         bool sameDevice=false;
         if(!String.IsNullOrWhiteSpace(address) && (config.Address!=address || changedSecret) && deviceId!=0){
-            var target=new ProfilePlugTransport(address,secret);target.VerifyModel();
+            var target=new ProfilePlugTransport(address,secret,deviceId);target.VerifyModel();
             if(target.DeviceId!=deviceId)throw new InvalidDataException("新地址属于其他插座；请先核实设备，现有配置与历史记录已保留。");
             sameDevice=true;
         }
@@ -143,6 +155,8 @@ public sealed class ProfileEnergyService : IDisposable {
         string today=China(DateTime.UtcNow).ToString("yyyy-MM-dd");
         if(cloud!=null && cloud.DeviceId==config.DeviceId && config.DeviceId!=0)foreach(var item in cloud.Days)if(String.CompareOrdinal(item.Key,today)<0)merged.Days[item.Key]=item.Value;
         var r=Summarize(merged,config.Price,DateTime.UtcNow);
+        // Cloud energy replaces local kWh, but never replaces locally observed awake time.
+        r.UsageDays=Summarize(history,config.Price,DateTime.UtcNow).UsageDays;
         r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);
         return r;}}
     static void ValidateCloud(ProfileCloudHistory value){
@@ -165,7 +179,8 @@ public sealed class ProfileEnergyService : IDisposable {
         var r=new ProfileEnergySnapshot{Price=price,LocalDay=today.ToString("yyyy-MM-dd"),WeekStart=week.ToString("yyyy-MM-dd"),MonthStart=month.ToString("yyyy-MM-dd")};
         foreach(var item in h.Days){DateTime date;var value=item.Value;
             if(!DateTime.TryParseExact(item.Key,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date) || date>today || value==null || Double.IsNaN(value.KWh) || Double.IsInfinity(value.KWh) || value.KWh<0 || Double.IsNaN(value.Seconds) || Double.IsInfinity(value.Seconds) || value.Seconds<0)continue;
-            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source};
+            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source,HighPowerSeconds=value.HighPowerSeconds,HighPowerCoverageSeconds=value.HighPowerCoverageSeconds};
+            if(value.Source!="MiHome")r.UsageDays[item.Key]=r.Days[item.Key];
             if(date==today){r.TodayKWh=value.KWh;r.TodaySeconds=value.Seconds;}
             if(date>=week){r.WeekKWh=(r.WeekKWh??0)+value.KWh;r.WeekSeconds+=value.Seconds;}
             if(date>=month){r.MonthKWh=(r.MonthKWh??0)+value.KWh;r.MonthSeconds+=value.Seconds;}
@@ -180,7 +195,7 @@ public sealed class ProfileEnergyService : IDisposable {
         if(command.HasValue)Event("energy.switch.request","已确认手动"+(command.Value?"开启":"关闭")+"插座","INFO",operation);
         ProfileEnergyConfig c;lock(gate)c=config;
         string secret=Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(c.Secret),entropy,DataProtectionScope.CurrentUser));
-        var transport=new ProfilePlugTransport(c.Address,secret);transport.VerifyModel();
+        var transport=new ProfilePlugTransport(c.Address,secret,c.DeviceId);transport.VerifyModel();
         if(c.DeviceId!=0 && transport.DeviceId!=c.DeviceId)throw new InvalidDataException("该 IP 已分配给其他插座，请更新地址；历史记录已保留。");
         if(c.DeviceId==0){lock(gate){c.DeviceId=transport.DeviceId;ProfileEnergyStore.Write(Path.Combine(root,"energy.settings.json"),Serializer().Serialize(c));}}
         if(command.HasValue){transport.Switch(command.Value);Event("energy.switch.accepted","插座确认手动开关请求；正在复核实际状态","INFO",operation);}
@@ -207,27 +222,55 @@ public sealed class ProfileEnergyService : IDisposable {
             if(seconds>0 && seconds<=120 && !previous.InvalidAfter){gap=false;DateTime at=previous.Time;
                 while(at<now){DateTime local=China(at),boundary=TimeZoneInfo.ConvertTimeToUtc(local.Date.AddDays(1),TimeZoneInfo.FindSystemTimeZoneById("China Standard Time"));DateTime end=boundary<now?boundary:now;
                     double duration=(end-at).TotalSeconds,startW=previous.Watts+(watts-previous.Watts)*(at-previous.Time).TotalSeconds/seconds,endW=previous.Watts+(watts-previous.Watts)*(end-previous.Time).TotalSeconds/seconds;
-                    string key=local.ToString("yyyy-MM-dd");if(!h.Days.ContainsKey(key))h.Days[key]=new ProfileEnergyDay();h.Days[key].KWh+=(startW+endW)/2*duration/3600000;h.Days[key].Seconds+=duration;at=end;}
+                    string key=local.ToString("yyyy-MM-dd");if(!h.Days.ContainsKey(key))h.Days[key]=new ProfileEnergyDay();var day=h.Days[key];day.KWh+=(startW+endW)/2*duration/3600000;day.Seconds+=duration;
+                    double fraction=startW>=HighPowerWatts && endW>=HighPowerWatts ? 1 : startW<HighPowerWatts && endW<HighPowerWatts ? 0 : (Math.Max(startW,endW)-HighPowerWatts)/Math.Abs(endW-startW);
+                    day.HighPowerSeconds=(day.HighPowerSeconds??0)+duration*fraction;day.HighPowerCoverageSeconds+=duration;at=end;}
             }}
         h.Points.Add(new ProfileEnergyPoint{Time=now,Watts=watts,BreakBefore=gap});h.Points.RemoveAll(p=>p.Time<now.AddDays(-1));
         string oldest=China(now).AddDays(-400).ToString("yyyy-MM-dd");var remove=new List<string>();foreach(var d in h.Days)if(String.CompareOrdinal(d.Key,oldest)<0)remove.Add(d.Key);foreach(var key in remove)h.Days.Remove(key);
     }
-    public void Dispose(){lock(gate){disposed=true;timer.Dispose();}}
+    public void Dispose(){lock(gate){disposed=true;timer.Dispose();}Microsoft.Win32.SystemEvents.PowerModeChanged-=PowerModeChanged;}
 }
 
 public sealed class ProfileEnergyChart : Control {
     public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();public bool Today;
+    readonly ToolTip tip=new ToolTip();string lastTip="";
     public ProfileEnergyChart(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);BackColor=Color.White;}
-    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        var area=new RectangleF(42,18,Width-56,Height-48);DateTime end=DateTime.UtcNow,start=Today ? TimeZoneInfo.ConvertTimeToUtc(TimeZoneInfo.ConvertTimeFromUtc(end,TimeZoneInfo.FindSystemTimeZoneById("China Standard Time")).Date,TimeZoneInfo.FindSystemTimeZoneById("China Standard Time")) : end.AddHours(-1);
-        var selected=Points.FindAll(p=>p.Time>=start && p.Time<=end);double max=100;foreach(var p in selected)max=Math.Max(max,p.Watts);max=Math.Ceiling(max/50)*50;
+    static DateTime Local(DateTime utc){return TimeZoneInfo.ConvertTimeFromUtc(utc,TimeZoneInfo.FindSystemTimeZoneById("China Standard Time"));}
+    DateTime Start(DateTime end){return Today ? TimeZoneInfo.ConvertTimeToUtc(Local(end).Date,TimeZoneInfo.FindSystemTimeZoneById("China Standard Time")) : end.AddHours(-1);}
+    RectangleF Plot {get{return new RectangleF(44,16,Math.Max(1,Width-64),Math.Max(1,Height-46));}}
+    protected override void OnPaint(PaintEventArgs e){
+        base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        var area=Plot;DateTime end=DateTime.UtcNow,start=Start(end);double span=Math.Max(1,(end-start).TotalSeconds);
+        var selected=Points.FindAll(p=>p.Time>=start && p.Time<=end);double max=50;foreach(var p in selected)max=Math.Max(max,p.Watts);max=Math.Ceiling(max/50)*50;
         using(var pen=new Pen(Color.FromArgb(233,239,243)))using(var text=new SolidBrush(Color.FromArgb(111,122,132))) {
-            for(int i=0;i<3;i++){float y=area.Bottom-area.Height*i/2;g.DrawLine(pen,area.Left,y,area.Right,y);g.DrawString((max*i/2).ToString("0"),Font,text,2,y-8);}
-            g.DrawString("W",Font,text,2,0);g.DrawString(TimeZoneInfo.ConvertTimeFromUtc(start,TimeZoneInfo.FindSystemTimeZoneById("China Standard Time")).ToString("HH:mm"),Font,text,area.Left,area.Bottom+8);g.DrawString(TimeZoneInfo.ConvertTimeFromUtc(end,TimeZoneInfo.FindSystemTimeZoneById("China Standard Time")).ToString("HH:mm"),Font,text,area.Right-43,area.Bottom+8);
-            if(selected.Count<2)g.DrawString("等待实际采样 · 连接后逐步生成曲线",Font,text,area.Left+8,area.Top+38);
+            for(int i=0;i<=2;i++){float y=area.Bottom-area.Height*i/2;g.DrawLine(pen,area.Left,y,area.Right,y);g.DrawString((max*i/2).ToString("0"),Font,text,3,y-8);}
+            g.DrawString("W",Font,text,3,0);
+            for(int i=0;i<=3;i++){float x=area.Left+area.Width*i/3;DateTime at=start.AddSeconds(span*i/3);string label=Local(at).ToString("HH:mm");var size=g.MeasureString(label,Font);g.DrawString(label,Font,text,x-size.Width/2,area.Bottom+9);}
+            if(selected.Count==0){
+                const string empty="暂无有效采样";var size=g.MeasureString(empty,Font);g.DrawString(empty,Font,text,area.Left+(area.Width-size.Width)/2,area.Top+area.Height/2-16);
+                const string hint="连接后生成曲线，断线时段留空";size=g.MeasureString(hint,Font);g.DrawString(hint,Font,text,area.Left+(area.Width-size.Width)/2,area.Top+area.Height/2+6);
+            }
         }
-        using(var pen=new Pen(Color.FromArgb(39,106,159),2)){for(int i=1;i<selected.Count;i++){var a=selected[i-1];var b=selected[i];if(b.BreakBefore || a.InvalidAfter || (b.Time-a.Time).TotalSeconds>120)continue;
-            float x1=area.Left+(float)((a.Time-start).TotalSeconds/(end-start).TotalSeconds)*area.Width,x2=area.Left+(float)((b.Time-start).TotalSeconds/(end-start).TotalSeconds)*area.Width;
-            g.DrawLine(pen,x1,area.Bottom-(float)(a.Watts/max)*area.Height,x2,area.Bottom-(float)(b.Watts/max)*area.Height);}}
+        using(var pen=new Pen(Color.FromArgb(39,106,159),2))
+        using(var fill=new System.Drawing.Drawing2D.LinearGradientBrush(area,Color.FromArgb(55,64,141,183),Color.FromArgb(4,64,141,183),90f))
+        using(var dot=new SolidBrush(Color.FromArgb(39,106,159))){
+            for(int i=0;i<selected.Count;i++){
+                var b=selected[i];float x2=area.Left+(float)((b.Time-start).TotalSeconds/span)*area.Width,y2=area.Bottom-(float)(b.Watts/max)*area.Height;
+                bool connected=i>0 && !b.BreakBefore && !selected[i-1].InvalidAfter && (b.Time-selected[i-1].Time).TotalSeconds<=120;
+                if(connected){var a=selected[i-1];float x1=area.Left+(float)((a.Time-start).TotalSeconds/span)*area.Width,y1=area.Bottom-(float)(a.Watts/max)*area.Height;
+                    g.FillPolygon(fill,new[]{new PointF(x1,area.Bottom),new PointF(x1,y1),new PointF(x2,y2),new PointF(x2,area.Bottom)});g.DrawLine(pen,x1,y1,x2,y2);
+                }
+                if(!connected || i==selected.Count-1)g.FillEllipse(dot,x2-2.5f,y2-2.5f,5,5);
+            }
+        }
     }
+    protected override void OnMouseMove(MouseEventArgs e){
+        base.OnMouseMove(e);DateTime end=DateTime.UtcNow,start=Start(end);var area=Plot;ProfileEnergyPoint nearest=null;double best=10;
+        if(area.Contains(e.Location))foreach(var p in Points){if(p.Time<start || p.Time>end)continue;double x=area.Left+(p.Time-start).TotalSeconds/Math.Max(1,(end-start).TotalSeconds)*area.Width,d=Math.Abs(x-e.X);if(d<best){best=d;nearest=p;}}
+        string value=nearest==null ? "" : Local(nearest.Time).ToString("HH:mm:ss")+"  ·  "+nearest.Watts.ToString("0.0")+" W（实际采样）";
+        if(value!=lastTip){tip.SetToolTip(this,value);lastTip=value;}
+    }
+    protected override void OnMouseLeave(EventArgs e){base.OnMouseLeave(e);tip.SetToolTip(this,"");lastTip="";}
+    protected override void Dispose(bool disposing){if(disposing)tip.Dispose();base.Dispose(disposing);}
 }

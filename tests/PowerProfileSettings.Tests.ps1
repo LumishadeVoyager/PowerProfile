@@ -23,6 +23,14 @@ try{
         $opener=New-Object Windows.Forms.Button
         $opener.Add_Click({$Script:testForm=Show-Settings -ReturnForm})
         $opener.PerformClick();$form=$Script:testForm
+        $tabs=@($form.Controls | Where-Object {$_ -is [Windows.Forms.TabControl]})[0]
+        Assert 'parameters split into two compact pages' ($tabs.TabPages.Count -eq 2 -and $form.ClientSize.Height -eq 510)
+        $form.Show();[Windows.Forms.Application]::DoEvents()
+        foreach($page in $tabs.TabPages){$tabs.SelectedTab=$page;[Windows.Forms.Application]::DoEvents();foreach($group in $page.Controls){
+            Assert 'parameter group fits its page' ($group.Right -le $page.ClientSize.Width -and $group.Bottom -le $page.ClientSize.Height)
+            Assert 'parameter controls fit their group' (@($group.Controls | Where-Object {$_.Right -gt $group.ClientSize.Width -or $_.Bottom -gt $group.ClientSize.Height}).Count -eq 0)
+        }}
+        $tabs.SelectedIndex=0;$form.Hide()
         $combo=$form.Tag.Controls.Idle.FreqCombo
         for($i=0;$i -lt $combo.Items.Count;$i++){if($combo.Items[$i].Value -eq $frequency){$combo.SelectedIndex=$i;break}}
         $timer=New-Object Windows.Forms.Timer;$timer.Interval=100;$timer.Tag=$form

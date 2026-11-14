@@ -16,9 +16,11 @@ jobs:
           }
           & .\tests\PowerProfileDetection.Tests.ps1
           & .\tests\PowerProfileUI.Tests.ps1
+          & .\tests\PowerProfileSettings.Tests.ps1
           & .\tests\PowerProfileEnergy.Tests.ps1
           & .\tests\PowerProfileWorkstation.Tests.ps1
           & .\tests\PowerProfileTelemetry.Tests.ps1
           & .\tests\PowerProfileLogViewer.Tests.ps1
           & .\tests\PowerProfileFileIO.Tests.ps1
           & .\tests\PowerProfileGame.Tests.ps1
+          python -m unittest discover -s tests -p test_cloud_history.py
