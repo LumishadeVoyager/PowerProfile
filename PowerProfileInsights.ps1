@@ -47,7 +47,7 @@ function Get-InsightsBrief($State,[DateTime]$Start,[DateTime]$End,[int]$Metric,[
     $change=if($null -eq $a.Value -or $null -eq $b.Value){'上期样本不足'}elseif($b.Value -eq 0){'上期为零'}else{'较上期 {0:+0.0;-0.0;0.0}%' -f (100*($a.Value-$b.Value)/$b.Value)}
     return "日均  周一至五 $(Format-InsightsValue $week.Value $Metric) · 周末 $(Format-InsightsValue $weekend.Value $Metric)`r`n$change · 仅已结束且有记录的日期"
 }
-function Update-WorkspaceInsights($State,[string]$Group,[int]$Count){
+function Update-WorkspaceInsightsCore($State,[string]$Group,[int]$Count){
     $w=$Script:Workspace;$t=$w.Tag;$bounds=Get-InsightsBounds $State $Group $Count $w;$t.Bounds=$bounds
     $filtering=$w.CustomDates.Checked -or $w.LedgerSearch.Text.Trim() -or $w.DayFilter.SelectedIndex -gt 0 -or $w.SourceFilter.SelectedIndex -gt 0 -or $w.QualityFilter.SelectedIndex -gt 0
     $w.Sections['EnergyFilters'].Caption='筛选与显示'+$(if($filtering){' · 已应用'})
@@ -82,7 +82,7 @@ function Get-WorkspaceGameRows($State,[DateTime]$Start,[DateTime]$End,[string]$S
     };return @($rows|Sort-Object {$_.Cells[1]} -Descending)
 }
 function Set-WorkspaceGameSessions($Rows){$w=$Script:Workspace;$w.GameSessions.Rows.Clear();$w.Tag.SessionDetails=@{};foreach($r in $Rows){$n=$w.GameSessions.Rows.Add([object[]]$r.Cells);$w.GameSessions.Rows[$n].Tag=$r.Id;$w.Tag.SessionDetails[$r.Id]=$r.Detail};$w.GameDetail.Text=if($Rows.Count){$Rows[0].Detail}else{'当前范围没有可重建会话；可查看下方逐日汇总。'}}
-function Update-WorkspaceGames($State){
+function Update-WorkspaceGamesCore($State){
     $w=$Script:Workspace;$t=$w.Tag;$count=@(7,30,90,400)[$w.GameRange.SelectedIndex];$end=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);$start=$end.AddDays(1-$count)
     $rows=@(Get-WorkspaceGameRows $State $start $end $w.GameSearch.Text.Trim());$t.GameRows=$rows;$t.Suppress=$true
     try{
@@ -115,7 +115,7 @@ function Export-WorkspaceInsights([string]$Kind){
 function Invoke-InsightsCommand([string]$Action,[string]$Id){
     $w=$Script:Workspace;$t=$w.Tag
     switch($Action){
-        'InsightsFilter'{$t.EnergyKey='';Update-ProfileWorkspace;return $true}
+        'InsightsFilter'{$t.EnergyKey='';if($t.DeferModels){Start-WorkspaceModels}else{Update-ProfileWorkspace};return $true}
         'LedgerSort'{$column=[int]$Id;$t.SortDescending=if($t.SortColumn -eq $column){-not $t.SortDescending}else{$column -eq 0};$t.SortColumn=$column;$t.EnergyKey='';Update-ProfileWorkspace;return $true}
         'LedgerColumns'{
             $menu=New-Object Windows.Forms.ContextMenuStrip;foreach($c in $w.Ledger.Columns){$item=New-Object Windows.Forms.ToolStripMenuItem;$item.Text=$c.HeaderText;$item.Checked=$c.Visible;$item.CheckOnClick=$true;$item.Enabled=$c.Index -ne 0;$item.Tag=$c.Index;$item.Add_CheckedChanged({param($sender,$eventArgs) $Script:Workspace.Ledger.Columns[[int]$sender.Tag].Visible=$sender.Checked});[void]$menu.Items.Add($item)};$menu.Add_Closed({param($sender,$eventArgs) $sender.Dispose()});$menu.Show([Windows.Forms.Cursor]::Position);return $true
@@ -123,9 +123,18 @@ function Invoke-InsightsCommand([string]$Action,[string]$Id){
         'HeatDate'{
             $date=[DateTime]::ParseExact($Id,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);$t.Suppress=$true;try{$w.Group.SelectedIndex=0;$w.CustomDates.Checked=$true;$w.FromDate.Value=$date;$w.ToDate.Value=$date;$w.LedgerSearch.Clear();$w.DayFilter.SelectedIndex=0;$w.SourceFilter.SelectedIndex=0;$w.QualityFilter.SelectedIndex=0}finally{$t.Suppress=$false};$w.ShowSection('EnergyFilters');$t.EnergyKey='';Update-ProfileWorkspace;$w.SelectLedger($Id);$w.Pages['Energy'].ScrollControlIntoView($w.Ledger);return $true
         }
-        'GamesFilter'{$t.GameKey='';Update-ProfileWorkspace;return $true}
+        'GamesFilter'{$t.GameKey='';if($t.DeferModels){Start-WorkspaceModels}else{Update-ProfileWorkspace};return $true}
         'GameSelect'{if($Id){$t.Suppress=$true;try{Set-WorkspaceGameSessions @($t.GameRows|Where-Object Name -eq $Id)}finally{$t.Suppress=$false}};return $true}
         'GameSessionSelect'{if($t.SessionDetails -and $t.SessionDetails.ContainsKey($Id)){$w.GameDetail.Text=$t.SessionDetails[$Id]};return $true}
         {$_ -in @('ExportCsv','ExportPng','ExportReport','ExportGames')}{Export-WorkspaceInsights $Action;return $true}
     };return $false
+}
+
+function Update-WorkspaceInsights($State,[string]$Group,[int]$Count){
+ $w=$Script:Workspace;$grid=[ProfileBufferedGrid]$w.Ledger;$grid.BeginBatch();$w.Pages['Energy'].SuspendLayout()
+ try{Update-WorkspaceInsightsCore $State $Group $Count}finally{$grid.EndBatch();$w.Pages['Energy'].ResumeLayout()}
+}
+function Update-WorkspaceGames($State){
+ $w=$Script:Workspace;$grids=@($w.GameTotals,$w.GameSessions,$w.GameGrid);foreach($g in $grids){([ProfileBufferedGrid]$g).BeginBatch()};$w.Pages['Games'].SuspendLayout()
+ try{Update-WorkspaceGamesCore $State}finally{foreach($g in $grids){([ProfileBufferedGrid]$g).EndBatch()};$w.Pages['Games'].ResumeLayout()}
 }

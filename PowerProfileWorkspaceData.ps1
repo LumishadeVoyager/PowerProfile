@@ -8,10 +8,10 @@ function Get-WorkspacePreferences([string]$Root=(Get-WorkspaceRoot)){
     $devices=if($value.devices){$value.devices}else{[PSCustomObject]@{}}
     $textScale=if($value.textScale -in @(100,125,150)){[int]$value.textScale}else{100}
     $motion=if($value.motion -is [bool]){[bool]$value.motion}else{$true}
-    return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices;motion=$motion}
+    return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices;motion=$motion;glass=$(if($value.glass -is [bool]){$value.glass}else{$true})}
 }
 function Save-WorkspacePreferences($Preferences,[string]$Root=(Get-WorkspaceRoot)){Write-AtomicJson (Join-Path $Root 'workspace.settings.json') $Preferences -Pretty}
-function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30,$From=$null,$To=$null,[int]$DayType=0){
+function Get-WorkspaceEnergyDataUncached($State,[string]$Group='Day',[int]$Count=30,$From=$null,$To=$null,[int]$DayType=0){
     $today=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
     $anchor=if($null -ne $To){([DateTime]$To).Date}else{$today}
     if($null -ne $From){$From=([DateTime]$From).Date;if($From -gt $anchor){throw '开始日期不能晚于结束日期。'};if(($anchor-$From).Days -ge 400){throw '最多查看 400 天。'};$Count=switch($Group){'Week'{[int][Math]::Floor((($anchor.AddDays(-(([int]$anchor.DayOfWeek+6)%7)))-$From.AddDays(-(([int]$From.DayOfWeek+6)%7))).TotalDays/7)+1};'Month'{($anchor.Year-$From.Year)*12+$anchor.Month-$From.Month+1};default{($anchor-$From).Days+1}}}

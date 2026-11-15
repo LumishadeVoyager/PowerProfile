@@ -1,6 +1,7 @@
 ﻿. (Join-Path $PSScriptRoot 'PowerProfileWorkspaceData.ps1')
 if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
 . (Join-Path $PSScriptRoot 'PowerProfileInsights.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileWorkspaceAsync.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileConnectionUI.ps1')
 $Script:Workspace=$null
 function Show-WorkspaceDialog($Form){
@@ -40,9 +41,10 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
         if(Invoke-InsightsCommand $Action $Id){return}
         switch($Action){
             'Navigate'{$w.Navigate($Id);return}
+            'Glass'{$prefs=Get-WorkspacePreferences;$prefs.glass=$w.Glass.Checked;Save-WorkspacePreferences $prefs;return}
             'Motion'{$prefs=Get-WorkspacePreferences;$prefs.motion=$w.Motion.Checked;Save-WorkspacePreferences $prefs;return}
             'GameColumns'{$show=-not $w.GameSessions.Columns[2].Visible;foreach($i in @(2,4,5,6,7)){$w.GameSessions.Columns[$i].Visible=$show};foreach($i in @(3,4,5)){$w.GameTotals.Columns[$i].Visible=$show};return}
-            'Page'{$t.DeviceKey='';$t.ScheduleKey='';Update-ProfileWorkspace;return}
+            'Page'{if($t.DeferModels -and $Id -in @('Energy','Games')){Start-WorkspaceModels;return};Update-ProfileWorkspace;return}
             'Theme'{$prefs=Get-WorkspacePreferences;$prefs.theme=@('System','Light','Dark')[[int]$Id];Save-WorkspacePreferences $prefs;$w.SetTheme([int]$Id);$t.Chart.DarkMode=[ProfileTheme]::Dark;$t.Chart.BackColor=[ProfileTheme]::Surface;$t.Chart.ForeColor=[ProfileTheme]::Text;$t.Chart.Invalidate();return}
             'TextSize'{$prefs=Get-WorkspacePreferences;$prefs.textScale=[int]$Id;Save-WorkspacePreferences $prefs;$page=$w.ActivePage;$w.Dispose();Show-ProfileWorkspace -Page $page;return}
             'Metric'{$pair=$Id -split ':';$prefs=Get-WorkspacePreferences;if($pair[1] -eq 'True'){$prefs.metrics=@($prefs.metrics)+@($pair[0])|Select-Object -Unique}else{$prefs.metrics=@($prefs.metrics|Where-Object {$_ -ne $pair[0]})};Save-WorkspacePreferences $prefs;$w.SetMetricVisible($pair[0],($pair[1] -eq 'True'));return}
@@ -51,7 +53,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
             'EnergyRange'{
                 $labels=switch($w.Group.SelectedIndex){1{@('近 4 周','近 8 周','近 12 周')};2{@('近 3 个月','近 6 个月','近 12 个月')};default{@('近 7 天','近 30 天','近 90 天')}}
                 if([string]$w.Range.Items[0] -ne $labels[0]){$index=$w.Range.SelectedIndex;$t.Suppress=$true;$w.Range.Items.Clear();foreach($label in $labels){[void]$w.Range.Items.Add($label)};$w.Range.SelectedIndex=[Math]::Max(0,$index);$t.Suppress=$false}
-                $t.EnergyKey='';$t.Chart.ResetView();Update-ProfileWorkspace;return
+                $t.EnergyKey='';$t.Chart.ResetView();if($t.DeferModels){Start-WorkspaceModels}else{Update-ProfileWorkspace};return
             }
             'LedgerSelection'{if($t.EnergyData.Details.ContainsKey($Id)){$w.SelectionInfo.Text=$t.EnergyData.Details[$Id]};return}
             'ChartSelection'{$w.SelectLedger($Id);return}
@@ -80,7 +82,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
             'RefreshDevices'{$t.PendingRequest=Send-DeviceHubRequest 'refresh';$t.PendingSince=[DateTime]::UtcNow;$w.Footer.Text='◷ 正在同步云端设备与实际状态';return}
             'RefreshEnergy'{$Script:EnergyService.Refresh();$w.Footer.Text='◷ 正在刷新插座采样；数据返回前保留原值';return}
             'Connection'{Show-WorkspaceConnectionWizard;return}
-            'Cloud'{$form=Show-CloudHistory -ReturnForm;[ProfileTheme]::Apply($form,[ProfileTheme]::Dark);$form.Tag.Timer.Start();try{[void]$form.ShowDialog($w)}finally{$form.Dispose()};$t.EnergyKey='';Update-ProfileWorkspace;return}
+            'Cloud'{$Script:WorkspaceModels=$null;$t.ModelSignature='';$t.PageSignatures.Clear();$form=Show-CloudHistory -ReturnForm;[ProfileTheme]::Apply($form,[ProfileTheme]::Dark);$form.Tag.Timer.Start();try{[void]$form.ShowDialog($w)}finally{$form.Dispose()};$t.EnergyKey='';Update-ProfileWorkspace;return}
             'AdvancedSettings'{Show-Settings;return}
             'PlanSettings'{Show-WorkspaceDialog (Show-ModernSettings -ReturnForm);return}
             'CState'{Show-WorkspaceDialog (Show-CStateProtection -ReturnForm);return}
@@ -88,7 +90,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
             'Logs'{Show-ModernLogViewer;return}
             'Hardware'{Show-ModernDashboard;return}
             {$_ -in @('Auto','Idle','Balanced','Game')}{Invoke-DashboardAction $Action;$w.Footer.Text='◷ 档位请求已发送，当前档位以 Worker 实际结果为准';Update-ProfileWorkspace;return}
-            'Refresh'{$t.EnergyKey='';$t.DeviceKey='';$t.ScheduleKey='';Update-ProfileWorkspace;return}
+            'Refresh'{$t.ModelSignature='';$Script:WorkspaceModels=$null;$t.EnergyKey='';$t.DeviceKey='';$t.ScheduleKey='';Update-ProfileWorkspace;return}
         }
     }catch{$w.Footer.Text='! '+$_.Exception.GetBaseException().Message;Write-ProfileEvent 'workspace.action.failed' $_.Exception.GetBaseException().Message 'WARN' @{action=$Action}}
 }
@@ -145,16 +147,17 @@ function Show-ProfileWorkspace {
     param([string]$Page='Overview',[switch]$ReturnForm)
     if($Script:Workspace -and -not $Script:Workspace.IsDisposed){$Script:Workspace.Show();$Script:Workspace.Navigate($Page);[ProfileVisual]::ActivateDashboard($Script:Workspace.Handle);if($ReturnForm){return $Script:Workspace};return}
     Initialize-EnergyService
-    $prefs=Get-WorkspacePreferences;$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$Script:Workspace=$w
+    $prefs=Get-WorkspacePreferences;$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w
     $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=2000
-    $w.Tag=@{Chart=$chart;Timer=$timer;EnergyKey='';DeviceKey='';ScheduleKey='';EnergyData=@{Details=@{}};PendingRequest=$null;Suppress=$false}
+    $w.Tag=@{Chart=$chart;Timer=$timer;EnergyKey='';DeviceKey='';ScheduleKey='';EnergyData=@{Details=@{}};PendingRequest=$null;Suppress=$false;DeferModels=(-not $ReturnForm);ModelReady=@{};PageSignatures=@{}}
+    $tModel=New-Object Windows.Forms.Timer;$tModel.Interval=30;$w.Tag.ModelTimer=$tModel;$tModel.Add_Tick({Complete-WorkspaceModels})
     $prefs=Get-WorkspacePreferences;$mode=[array]::IndexOf(@('System','Light','Dark'),$prefs.theme);$w.Theme.SelectedIndex=$mode;$w.SetTheme($mode)
     foreach($key in $w.MetricOptions.Keys){$visible=$prefs.metrics -contains $key;$w.MetricOptions[$key].Checked=$visible;$w.SetMetricVisible($key,$visible)}
     $w.add_Command({param($sender,$eventArgs) if(-not $sender.Tag.Suppress){Invoke-WorkspaceCommand $eventArgs.Action $eventArgs.Id}})
     $chart.add_PeriodSelected({param($sender,$eventArgs) Invoke-WorkspaceCommand 'ChartSelection' $eventArgs.Key})
-    $timer.Add_Tick({if($Script:Workspace -and $Script:Workspace.Visible){try{Update-ProfileWorkspace}catch{$Script:Workspace.Footer.Text='! 状态暂不可读，保留现有显示；下轮自动重试';Write-ProfileEvent 'workspace.refresh.failed' $_.Exception.Message 'WARN'}}})
-    $w.Add_Disposed({param($sender,$eventArgs) $sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose();if($sender.Icon){$sender.Icon.Dispose()};$Script:Workspace=$null})
+    $timer.Add_Tick({if($Script:Workspace -and $Script:Workspace.Visible){try{if($Script:Workspace.Tag.DeferModels -and $Script:Workspace.ActivePage -in @('Energy','Games')){Start-WorkspaceModels}else{Update-ProfileWorkspace}}catch{$Script:Workspace.Footer.Text='! 状态暂不可读，保留现有显示；下轮自动重试';Write-ProfileEvent 'workspace.refresh.failed' $_.Exception.Message 'WARN'}}})
+    $w.Add_Disposed({param($sender,$eventArgs) $sender.Tag.ModelTimer.Stop();$sender.Tag.ModelTimer.Dispose();if($sender.Tag.ModelJob){$sender.Tag.ModelJob.PowerShell.Stop();$sender.Tag.ModelJob.PowerShell.Dispose()};$sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose();if($sender.Icon){$sender.Icon.Dispose()};$Script:Workspace=$null})
     [Windows.Forms.Application]::add_ApplicationExit({if($Script:Workspace){$Script:Workspace.Dispose()}})
     $chart.DarkMode=[ProfileTheme]::Dark;$chart.BackColor=[ProfileTheme]::Surface;$chart.ForeColor=[ProfileTheme]::Text
     Update-ProfileWorkspace;$w.Footer.Text='● 已就绪';$timer.Start();$w.Navigate($Page)

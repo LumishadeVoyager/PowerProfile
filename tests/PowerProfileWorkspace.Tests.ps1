@@ -54,6 +54,8 @@ try{
     $w.MetricOptions['game'].Checked=$false;Assert 'card preference persists separately' ((Get-WorkspacePreferences).metrics -notcontains 'game')
     $prefs=Get-WorkspacePreferences;$prefs.devices|Add-Member -NotePropertyName 'lamp' -NotePropertyValue ([PSCustomObject]@{alias='Desk lamp';room='Study';favorite=$true});Save-WorkspacePreferences $prefs
     $w.Navigate('Devices');Assert 'device cards replace raw device table' ($w.DeviceHost.Controls.Count -eq 2)
+    $originalCard=$w.DeviceHost.Controls[0];$w.Tag.DeviceKey='';Update-ProfileWorkspace
+    Assert 'device refresh reuses existing controls when identity is unchanged' ([object]::ReferenceEquals($originalCard,$w.DeviceHost.Controls[0]))
     $w.Favorites.Checked=$true;Assert 'favorite filter and local alias work' ($w.DeviceHost.Controls.Count -eq 1 -and @($w.DeviceHost.Controls[0].Controls|Where-Object {$_.Text -like '*Desk lamp*'}).Count -eq 1)
     $w.Favorites.Checked=$false;$w.Room.SelectedItem='Study';Assert 'room filter works' ($w.DeviceHost.Controls.Count -eq 1)
     $w.Room.SelectedItem='全部分组';$w.Search.Text='cuco';Assert 'model search works' ($w.DeviceHost.Controls.Count -eq 1)
@@ -92,6 +94,10 @@ try{
     Assert 'runtime remains reachable after font scaling and background refresh' ($w.Runtime.Visible -and $runtimeRect.Top -ge 0 -and $runtimeRect.Top -lt $w.Pages['Overview'].ClientSize.Height)
     $w.Dispose();$w=Show-ProfileWorkspace -ReturnForm;$w.Tag.Timer.Stop();Assert 'appearance and card preferences survive reopening' ([ProfileTheme]::Dark -and -not $w.MetricOptions['game'].Checked -and $w.TextSize.SelectedIndex -eq 1)
     Assert 'UI actions preserve core settings and existing task configuration' ((Get-FileHash $SettingsPath).Hash -eq $settingsHash -and (Get-FileHash (Join-Path $root 'devices.hub.json')).Hash -eq $hubHash)
+    $w.Tag.DeferModels=$true;$w.Tag.ModelSignature='';$w.Navigate('Energy');$deadline=[Diagnostics.Stopwatch]::StartNew();while($w.Tag.ModelJob -and $deadline.ElapsedMilliseconds -lt 10000){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(10)}
+    Assert 'background model preparation preserves chart values and usable rows' ($w.Tag.ModelReady['Energy'] -and $w.Tag.EnergyData.Rows.Count -gt 0 -and @($w.Tag.Chart.Periods|Where-Object {$null -ne $_.Cost}).Count -gt 0)
+    $w.Navigate('Games');$w.Navigate('Overview');$deadline.Restart();while($w.Tag.ModelJob -and $deadline.ElapsedMilliseconds -lt 10000){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(10)}
+    Assert 'finished background work never navigates away from the chosen page' ($w.ActivePage -eq 'Overview' -and -not $w.Tag.ModelJob)
     Assert 'navigation and visual settings never enqueue physical operations' (-not(Test-Path (Join-Path $hubDir 'queue')))
     $w.Dispose()
 }finally{
