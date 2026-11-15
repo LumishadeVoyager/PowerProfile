@@ -125,6 +125,30 @@ public sealed class ProfileMetric : ProfileSurface {
     public ProfileMetric(string title){Height=106;Caption.Text=title;Caption.Dock=DockStyle.Top;Caption.Height=21;Caption.Tag="muted";Value.Dock=DockStyle.Top;Value.Height=34;Value.Font=new Font("Microsoft YaHei UI",20,FontStyle.Bold);Value.AutoEllipsis=true;Context.Dock=DockStyle.Fill;Context.Tag="muted";Context.AutoEllipsis=true;Controls.Add(Context);Controls.Add(Value);Controls.Add(Caption);Value.Text="—";}
     public void Set(string value,string context){Value.Text=value;Context.Text=context;Value.ForeColor=ProfileTheme.Accent;}
 }
+public sealed class ProfileAIStat : ProfileSurface {
+    public readonly Label Caption=new Label(),Value=new Label(),Context=new Label();
+    public double Fraction;public bool Composition;
+    readonly ProfileHoverTip tip;
+    public ProfileAIStat(string title){
+        Height=128;Padding=Padding.Empty;AccessibleRole=AccessibleRole.Grouping;
+        Caption.Text=title;Caption.Tag=Context.Tag="muted";
+        Value.Text="—";Value.Font=new Font("Microsoft YaHei UI",24,FontStyle.Bold);
+        foreach(var label in new[]{Caption,Value,Context}){label.AutoEllipsis=true;Controls.Add(label);}
+        tip=new ProfileHoverTip(this);SizeChanged+=(s,e)=>PerformLayout();
+    }
+    public void Set(string title,string value,string context,double fraction,string detail){
+        Caption.Text=title;Value.Text=value;Context.Text=context;Fraction=Math.Max(0,Math.Min(1,fraction));
+        AccessibleName=title;AccessibleDescription=detail;tip.Update(detail);Invalidate();
+    }
+    protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);if(Caption==null)return;float f=Font.Size/9f;int pad=(int)(14*f),width=Math.Max(1,Width-pad*2);Caption.SetBounds(pad,(int)(12*f),width,(int)(21*f));Value.SetBounds(pad,(int)(31*f),width,(int)(50*f));Context.SetBounds(pad,(int)(83*f),width,(int)(20*f));}
+    protected override void OnPaint(PaintEventArgs e){
+        base.OnPaint(e);float f=Font.Size/9f;var track=new RectangleF(14*f,Height-15*f,Math.Max(1,Width-28*f),5*f);
+        Color codex=ProfileTheme.Dark?Color.FromArgb(86,209,173):Color.FromArgb(32,139,111),claude=ProfileTheme.Dark?Color.FromArgb(250,185,88):Color.FromArgb(204,125,32);
+        using(var path=ProfileMotion.Round(track,2*f))using(var brush=new SolidBrush(Composition?claude:ProfileTheme.Border))e.Graphics.FillPath(brush,path);
+        if(Fraction>0)using(var path=ProfileMotion.Round(new RectangleF(track.X,track.Y,(float)(track.Width*Fraction),track.Height),2*f))using(var brush=new SolidBrush(Composition?codex:ProfileTheme.Accent))e.Graphics.FillPath(brush,path);
+    }
+    protected override void Dispose(bool disposing){if(disposing)tip.Dispose();base.Dispose(disposing);}
+}
 public sealed class ProfileScheduleCanvas : Control {
     public List<ProfileScheduleSlot> Slots=new List<ProfileScheduleSlot>();public DateTime WeekStart=DateTime.Today;
     readonly ProfileHoverTip tip;readonly List<Tuple<RectangleF,ProfileScheduleSlot>> hit=new List<Tuple<RectangleF,ProfileScheduleSlot>>();
@@ -182,7 +206,7 @@ public sealed class ProfileWorkspaceForm : Form {
     public readonly Label Footer=new Label(),OverviewReason=new Label(),Runtime=new Label(),Quality=new Label(),SelectionInfo=new Label(),TaskInfo=new Label(),GameInfo=new Label();
     public readonly Panel ChartHost=new Panel();public readonly ProfileScheduleCanvas Calendar=new ProfileScheduleCanvas();
     public readonly List<CheckBox> SeriesChecks=new List<CheckBox>();
-    public readonly Panel AIChartHost=new Panel();public readonly Label AISummary=new Label(),AIStatus=new Label();public readonly TextBox AISearch=new TextBox();public readonly ComboBox AISource,AIClient,AIRange,AIView,AICurrency,AnalysisMode,TrendCurrency,TrendSource;public readonly DataGridView AIGrid;
+    public readonly Panel AIChartHost=new Panel();public readonly Label AIPeriodSummary=new Label(),AIStatus=new Label();public readonly ProfileWrap AIStatHost=new ProfileWrap();public readonly ProfileAIStat AITokens=new ProfileAIStat("累计 tokens"),AICost=new ProfileAIStat("累计估算");public readonly TextBox AISearch=new TextBox();public readonly ComboBox AISource,AIClient,AIRange,AIView,AICurrency,AnalysisMode,TrendCurrency,TrendSource;public readonly DataGridView AIGrid;
     public readonly DataGridView Ledger,GameGrid,RuleGrid,GameTotals,GameSessions;
     public readonly TextBox LedgerSearch=new TextBox(),GameSearch=new TextBox();
     public readonly ComboBox DayFilter,SourceFilter,QualityFilter,GameRange;
@@ -235,9 +259,10 @@ public sealed class ProfileWorkspaceForm : Form {
         Ledger.SelectionChanged+=(s,e)=>Emit("LedgerSelection",Ledger.CurrentRow==null?"":Convert.ToString(Ledger.CurrentRow.Tag));foreach(DataGridViewColumn c in Ledger.Columns)c.SortMode=c.Index<7?DataGridViewColumnSortMode.Programmatic:DataGridViewColumnSortMode.NotSortable;Ledger.ColumnHeaderMouseClick+=(s,e)=>{if(e.ColumnIndex<7)Emit("LedgerSort",e.ColumnIndex.ToString());};
         LedgerSearch.TextChanged+=(s,e)=>Emit("InsightsFilter");foreach(var combo in new[]{DayFilter,SourceFilter,QualityFilter})combo.SelectedIndexChanged+=(s,e)=>Emit("InsightsFilter");CustomDates.CheckedChanged+=(s,e)=>{FromDate.Enabled=ToDate.Enabled=CustomDates.Checked;Emit("InsightsFilter");};FromDate.ValueChanged+=(s,e)=>Emit("InsightsFilter");ToDate.ValueChanged+=(s,e)=>Emit("InsightsFilter");
         energy.Controls.Add(Insights);Insights.Metric.SelectedIndexChanged+=(s,e)=>Emit("InsightsFilter");Insights.Heatmap.Selected+=(s,e)=>Emit(e.Action,e.Id);Range.SelectedIndexChanged+=(s,e)=>Emit("EnergyRange");Group.SelectedIndexChanged+=(s,e)=>Emit("EnergyRange");
-        var ai=Column(Pages["AI"]);AISource=Combo(new[]{"客户端日志","CC Switch"});AISource.SelectedIndex=0;AIClient=Combo(new[]{"全部","Codex","Claude Code"});AIClient.SelectedIndex=0;AIRange=Combo(new[]{"近 7 天","近 30 天","近 90 天","近 400 天"});AIRange.SelectedIndex=1;ai.Controls.Add(Row(AIRange,AIClient,AISource));
-        AIView=Combo(new[]{"Token 趋势","估算费用","独立支出"});AIView.SelectedIndex=0;AICurrency=Combo(new[]{"USD","CNY"});AICurrency.SelectedIndex=0;AICurrency.Width=80;ai.Controls.Add(Row(AIView,AICurrency,Button("设置单价","AIPrice"),Button("支出","AIExpense"),Button("导出","AIExport"),Button("接入","AISources")));
-        AISummary.AutoSize=true;AISummary.Font=new Font("Microsoft YaHei UI",12,FontStyle.Bold);ai.Controls.Add(AISummary);AIChartHost.Height=210;ai.Controls.Add(AIChartHost);AISearch.Width=200;AISearch.AccessibleName="搜索 AI 模型或日期";ai.Controls.Add(Row(new Label{Text="搜索",AutoSize=true},AISearch,Button("完整字段","AIColumns")));
+        var ai=Column(Pages["AI"]);AISource=Combo(new[]{"客户端日志","CC Switch"});AISource.Width=125;AISource.SelectedIndex=0;AIClient=Combo(new[]{"全部","Codex","Claude Code"});AIClient.Width=108;AIClient.SelectedIndex=0;AIRange=Combo(new[]{"近 7 天","近 30 天","近 90 天","近 400 天"});AIRange.Width=108;AIRange.SelectedIndex=1;ai.Controls.Add(Row(AIRange,AIClient,AISource,MenuButton("更多",new[]{new[]{"设置模型单价","AIPrice"},new[]{"记录订阅 / 充值","AIExpense"},new[]{"导出当前 CSV","AIExport"},new[]{"本地来源接入","AISources"},new[]{"切换完整字段","AIColumns"}})));
+        AISource.AccessibleName="AI 记录来源";AIClient.AccessibleName="AI 客户端";AIRange.AccessibleName="AI 日期范围";AITokens.Composition=true;AIStatHost.ItemWidth=210;AIStatHost.Controls.Add(AITokens);AIStatHost.Controls.Add(AICost);ai.Controls.Add(AIStatHost);
+        AIView=Combo(new[]{"Token 趋势","估算费用","独立支出"});AIView.Width=125;AIView.SelectedIndex=0;AICurrency=Combo(new[]{"USD","CNY"});AICurrency.SelectedIndex=0;AICurrency.Width=70;AICurrency.AccessibleName="AI 费用币种";AIView.AccessibleName="AI 统计视图";AIPeriodSummary.AutoSize=true;AIPeriodSummary.Tag="muted";AIPeriodSummary.Margin=new Padding(4,8,0,0);ai.Controls.Add(Row(AIView,AICurrency,AIPeriodSummary));
+        AIChartHost.Height=180;ai.Controls.Add(AIChartHost);AISearch.Width=210;AISearch.AccessibleName="搜索 AI 模型或日期";ai.Controls.Add(Row(new Label{Text="用量明细",AutoSize=true,Margin=new Padding(0,7,10,0)},AISearch));
         AIGrid=Grid(new[]{"日期 / 星期","客户端","模型","Tokens","费用 / 币种","新增 / 读缓存 / 写缓存 / 输出","计价覆盖"});AIGrid.Height=260;foreach(int c in new[]{2,5,6})AIGrid.Columns[c].Visible=false;ai.Controls.Add(AIGrid);PrepareDetail(AIStatus);AddSection(ai,"AIStatus","接入状态与统计口径",AIStatus);
         AISource.SelectedIndexChanged+=(s,e)=>{TrendSource.SelectedIndex=AISource.SelectedIndex;Emit("AIFilter");};AICurrency.SelectedIndexChanged+=(s,e)=>{TrendCurrency.SelectedIndex=AICurrency.SelectedIndex;Emit("AIFilter");};foreach(var combo in new[]{AIClient,AIRange,AIView})combo.SelectedIndexChanged+=(s,e)=>Emit("AIFilter");AISearch.TextChanged+=(s,e)=>Emit("AIFilter");
         var games=Column(Pages["Games"]);GameRange=Combo(new[]{"近 7 天","近 30 天","近 90 天","近 400 天"});GameRange.SelectedIndex=1;GameRange.Width=120;GameSearch.Width=150;GameSearch.AccessibleName="搜索游戏名称";
@@ -261,7 +286,7 @@ public sealed class ProfileWorkspaceForm : Form {
         AddSection(settings,"About","后台运行说明",Label("关闭窗口后托盘与已启用的设备任务继续运行。设备任务需要电脑唤醒并联网。暂停任务请在任务页停用中枢。",9));
         SizeChanged+=(s,e)=>Adapt();KeyDown+=(s,e)=>{if(e.Control&&e.KeyCode==Keys.D1)Navigate("Overview");if(e.Control&&e.KeyCode==Keys.D2)Navigate("Energy");if(e.Control&&e.KeyCode==Keys.D3)Navigate("Devices");if(e.Control&&e.KeyCode==Keys.D4)Navigate("Automation");if(e.KeyCode==Keys.F5)Emit("Refresh");};
         content.BringToFront();Footer.SendToBack();NavigationStrip.SendToBack();header.SendToBack();
-        if(textScale==125||textScale==150){float factor=textScale/100f;var fonts=new Dictionary<Control,Font>();CaptureFonts(this,fonts);Scale(new SizeF(factor,factor));foreach(var item in fonts)item.Key.Font=new Font(item.Value.FontFamily,item.Value.Size*factor,item.Value.Style);MetricHost.ItemWidth=(int)(220*factor);DeviceHost.ItemWidth=(int)(260*factor);}
+        if(textScale==125||textScale==150){float factor=textScale/100f;var fonts=new Dictionary<Control,Font>();CaptureFonts(this,fonts);Scale(new SizeF(factor,factor));foreach(var item in fonts)item.Key.Font=new Font(item.Value.FontFamily,item.Value.Size*factor,item.Value.Style);MetricHost.ItemWidth=(int)(220*factor);DeviceHost.ItemWidth=(int)(260*factor);AIStatHost.ItemWidth=(int)(210*factor);}
         SystemEvents.UserPreferenceChanged+=SystemThemeChanged;building=false;Navigate("Overview");Adapt();
     }
     static void PrepareDetail(Label label){label.AutoSize=true;label.MaximumSize=new Size(480,0);label.Margin=new Padding(0,5,0,8);label.Tag="muted";}

@@ -51,11 +51,23 @@ try{
     Invoke-WorkspaceCommand 'ResetChart';Assert 'chart resets viewport' ($w.Tag.Chart.ViewStart -eq 0 -and $w.Tag.Chart.ViewCount -eq 0)
     $aiRow=[PSCustomObject]@{date=$Script:fixture.LocalDay;client='Codex';model='test-model';source='native';tokens=12000;input=5000;cached=5000;write=0;output=2000;cost=$null;currency=$null;pricedTokens=0}
     Write-AtomicJson (Join-Path $root 'ai.snapshot.json') @{version=1;revision='fixture';startedAt=[DateTime]::UtcNow.ToString('o');updatedAt=[DateTime]::UtcNow.ToString('o');rows=@($aiRow);daily=@($aiRow);status=@{Codex='已接入';'Claude Code'='未发现本地目录'};errors=@{}}
-    $w.Navigate('AI');Assert 'AI tab shows recorded tokens with unknown prices preserved' ($w.AIGrid.Rows.Count -eq 1 -and $w.AIGrid.Rows[0].Cells[4].Value -eq '待配置' -and $w.AISummary.Text -match '12,000')
+    $w.Navigate('AI');Assert 'AI tab shows recorded tokens with unknown prices preserved' ($w.AIGrid.Rows.Count -eq 1 -and $w.AIGrid.Rows[0].Cells[4].Value -eq '待配置' -and $w.AITokens.Value.Text -eq '1.20 万' -and $w.AICost.Value.Text -eq '待配置' -and $w.AITokens.AccessibleDescription -match '12,000')
+    Assert 'AI overview uses two aligned cards with readable large values' ($w.AIStatHost.Controls.Count -eq 2 -and $w.AITokens.Top -eq $w.AICost.Top -and $w.AITokens.Value.Height -ge $w.AITokens.Value.Font.Height -and $w.AICost.Value.Height -ge $w.AICost.Value.Font.Height)
+    Assert 'exact totals stay in collapsed details instead of five summary lines' (-not $w.Sections['AIStatus'].Expanded -and $w.AIStatus.Text -match '12,000' -and $w.AIPeriodSummary.Text -notmatch "`n")
     Assert 'AI chart uses recorded daily tokens and its own unit' ($w.Tag.AIChart.AnalyticsMode -eq 1 -and @($w.Tag.AIChart.Periods|Where-Object {$_.CodexTokens -eq 0.012}).Count -eq 1)
     $w.Navigate('Energy');$w.AnalysisMode.SelectedIndex=1;$p=@($w.Tag.Chart.Periods|Where-Object Key -eq $Script:fixture.LocalDay)[0]
     Assert 'integrated trend retains power cost and uses a separate million-token axis' ($w.Tag.Chart.AnalyticsMode -eq 1 -and $p.CodexTokens -eq 0.012 -and $p.Cost -eq 0.35 -and $w.Ledger.Columns[7].Visible)
     $w.AnalysisMode.SelectedIndex=2;Assert 'unpriced AI fees remain a gap in money view' ($null -eq $p.CodexCost -and $p.CodexCostPartial)
+    $aiRow.cost=0.02;$aiRow.currency='USD';$aiRow.pricedTokens=6000
+    Write-AtomicJson (Join-Path $root 'ai.snapshot.json') @{version=1;revision='priced';updatedAt=[DateTime]::UtcNow.ToString('o');rows=@($aiRow);daily=@($aiRow);status=@{};errors=@{}}
+    $w.Navigate('AI');Assert 'cost card visualizes partial pricing coverage' ($w.AICost.Value.Text -eq '0.02' -and $w.AICost.Fraction -eq 0.5 -and $w.AICost.Context.Text -match '部分')
+    $w.AICurrency.SelectedItem='CNY';Assert 'currency switch never presents USD as CNY' ($w.AICost.Value.Text -eq '—' -and $w.AICost.Context.Text -match '其他币种')
+    $w.AICurrency.SelectedItem='USD';Write-AtomicJson (Join-Path $root 'ai.charges.json') @{charges=@(@{date=$Script:fixture.LocalDay;client='Codex';currency='USD';amount=20})}
+    $w.Tag.AIChargeRevision='fixture-charge';$w.AIView.SelectedIndex=2
+    Assert 'independent expense view keeps tokens and charges in distinct cards' ($w.AICost.Caption.Text -match '独立支出' -and $w.AICost.Value.Text -eq '20.00' -and $w.AITokens.Value.Text -eq '1.20 万' -and -not $w.AIChartHost.Visible)
+    $w.AIView.SelectedIndex=0;$w.ClientSize=New-Object Drawing.Size 420,600;[Windows.Forms.Application]::DoEvents()
+    Assert 'narrow AI view stacks cards without clipping' ($w.AICost.Top -ge $w.AITokens.Bottom -and $w.AICost.Right -le $w.AIStatHost.Width)
+    $w.ClientSize=New-Object Drawing.Size 540,720;$w.Navigate('Energy')
     $w.AnalysisMode.SelectedIndex=0
     $w.Group.SelectedIndex=1;Assert 'range labels match weekly aggregation' ([string]$w.Range.Items[0] -eq '近 4 周');$w.Group.SelectedIndex=0
     $w.Theme.SelectedIndex=2;Assert 'dark theme updates chart and surfaces' ([ProfileTheme]::Dark -and $w.Tag.Chart.DarkMode -and $w.BackColor.GetBrightness() -lt 0.3)
