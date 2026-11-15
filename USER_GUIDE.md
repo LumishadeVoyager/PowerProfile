@@ -1,10 +1,12 @@
 # PowerProfile 使用手册
 
-适用于 v1.1.0。PowerProfile 是 Windows 托盘电源管理工具；米家插座、云端历史和设备中枢均为可选功能。无需插座即可使用电源档位与游戏识别。
+适用于 v1.2.0。PowerProfile 是 Windows 托盘电源管理工具；米家插座、云端历史和设备中枢均为可选功能。无需插座即可使用电源档位与游戏识别。
+
+新版左键托盘打开统一工作台，侧栏包括“总览 / 用电分析 / 游戏记录 / 设备 / 自动化 / 设置”。连接入口在总览或用电分析的“连接自检向导 / 连接与电价”；设备与任务可直接从对应侧栏进入。外观、缩放、交互图表、数据依据、任务时间轴与完整五步接入说明见 [工作台详细手册](WORKSPACE.md)。下文保留独立工具窗口的名称，便于旧版用户查找。
 
 ## 1. 下载与安装
 
-1. 从 [GitHub 最新 Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载 **PowerProfile-1.1.0-windows.zip**，不要把源码压缩包当作安装包。
+1. 从 [GitHub 最新 Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载 **PowerProfile-1.2.0-windows.zip**，不要把源码压缩包当作安装包。
 2. 完整解压到自己的本地固定目录，例如 `C:\Tools\PowerProfile`。不要直接在 ZIP 中运行，也不要放在临时目录、只读目录或多人共用的可写目录。
 3. Windows 10 / 11、Windows PowerShell 5.1、.NET Framework 4.8；安装和电源管理需要管理员权限。主要在 Intel 混合架构笔记本验证，其他 CPU / 固件可能不支持全部电源参数，请先验证。
 4. 打开管理员 Windows PowerShell，进入解压目录，执行：

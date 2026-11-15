@@ -101,6 +101,9 @@ public sealed class ProfileEnergySnapshot {
     public DateTime UsageUpdatedAt;
     public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();
 }
+public sealed class ProfileConnectionProbe {
+    public volatile bool Completed;public bool Success;public string Phase="准备验证",Message="",Address;public uint DeviceId;public bool? On;public double? Watts;
+}
 public sealed class ProfileEnergyService : IDisposable {
     public const double HighPowerWatts=150;
     readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;
@@ -139,6 +142,12 @@ public sealed class ProfileEnergyService : IDisposable {
     void Event(string code,string message,string level,string operation=null){lock(gate){if(events.Count>=100)events.Dequeue();events.Enqueue(new[]{code,message,level,operation??Guid.NewGuid().ToString()});}}
     public string[][] DrainEvents(){lock(gate){var r=events.ToArray();events.Clear();return r;}}
     public string Address {get{lock(gate)return config.Address ?? "";}}
+    public ProfileConnectionProbe TestConnection(string address,string secret){
+        uint expected;lock(gate){expected=config.DeviceId;if(String.IsNullOrWhiteSpace(secret)&&!String.IsNullOrEmpty(config.Secret))secret=Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(config.Secret),entropy,DataProtectionScope.CurrentUser));}
+        Validate(address,secret,null);var probe=new ProfileConnectionProbe{Address=address};
+        ThreadPool.QueueUserWorkItem(_=>{try{probe.Phase="验证设备身份与授权";var transport=new ProfilePlugTransport(address,secret,expected);transport.VerifyModel();probe.DeviceId=transport.DeviceId;probe.Phase="读取实际开关与功率";var values=transport.Read();var state=ProfilePlugTransport.ReadValue(values,2,1);if(!(state is bool))throw new InvalidDataException("设备未提供有效开关读回。");probe.On=(bool)state;var raw=ProfilePlugTransport.ReadValue(values,11,2);double watts;if(raw!=null&&Double.TryParse(Convert.ToString(raw,CultureInfo.InvariantCulture),NumberStyles.Float,CultureInfo.InvariantCulture,out watts)&&!Double.IsNaN(watts)&&!Double.IsInfinity(watts)&&watts>=0&&watts<=3680)probe.Watts=watts;probe.Success=true;probe.Phase="验证通过";probe.Message=probe.Watts.HasValue?"型号、授权、身份与开关功率读取通过；尚未保存。":"开关读取通过；此固件未提供有效功率，不会显示为零。";}
+            catch(Exception e){probe.Phase="验证未通过";probe.Message=e is System.Net.Sockets.SocketException?"未收到插座响应：检查同一局域网、IP、访客网络隔离和 UDP 54321。":e is CryptographicException?"授权无法解密或 Token 无效，请重新填写本机设备 Token。":e is InvalidDataException||e is ArgumentException?e.Message:"读取失败，请检查授权、网络及设备固件。";}finally{probe.Completed=true;}});return probe;
+    }
     public static void Validate(string address,string secret,decimal? price){if(price.HasValue && (price<0 || price>10))throw new ArgumentException("电价应为 0–10 元/度。");if(!String.IsNullOrWhiteSpace(address))new ProfilePlugTransport(address,secret);}
     public void Configure(string address,string secret,decimal? price){lock(gate){
         if(busy)throw new InvalidOperationException("正在连接或操作插座，请稍后保存。");

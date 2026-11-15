@@ -42,7 +42,7 @@ function Show-ProfileWelcome([switch]$ReturnForm){
     $intro=New-ModernLabel "先使用电源档位，再按需连接米家。没有插座也能正常使用。`r`n自动模式以游戏识别为准；手动档位优先。频率需按自己电脑调整。" 18 18 580;$intro.Height=55;$guide.Controls.Add($intro)
     $steps=@(
         @('1 · 检查性能档位','从保守配置开始；无需套用开发者电脑参数。','档位设置',{Show-Settings}),
-        @('2 · 连接米家插座','电脑与插座同一局域网；准备 IP、32 位 Token 和电价。','插座与电价',{Show-EnergyConnection}),
+        @('2 · 连接米家插座','电脑与插座同一局域网；准备 IP、32 位 Token 和电价。','接入与自检',{Show-WorkspaceConnectionWizard}),
         @('3 · 补录米家历史（可选）','先装 Python 3.10+ 并运行 Install-EnergyHistory.ps1，再扫码。','米家历史',{Show-CloudHistory}),
         @('4 · 其他设备与定时任务（可选）','云端登录后选择设备；保持状态需要电脑在线、唤醒。','设备中枢',{Show-DeviceHub})
     )

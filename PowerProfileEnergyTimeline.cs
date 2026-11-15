@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Windows.Forms;
 
 public sealed class ProfileEnergyPeriod {
+    public string Key {get;set;}
     public string Label {get;set;}
     public double? Cost {get;set;}
     public double? UsageHours {get;set;}

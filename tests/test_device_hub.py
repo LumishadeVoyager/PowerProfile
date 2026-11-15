@@ -232,6 +232,45 @@ class HubTests(unittest.TestCase):
         self.worker.requests(self.now)
         self.assertFalse(self.api.commands)
 
+    def test_operation_feedback_distinguishes_ack_and_actual_readback(self):
+        self.worker.config['rules'] = []
+        queue = self.worker.private / 'queue';queue.mkdir(parents=True)
+        phases = []
+        original = self.worker.operation
+        def observe(ident, phase, message):
+            phases.append(phase)
+            original(ident, phase, message)
+        self.worker.operation = observe
+        hub.atomic(queue / 'success.json', dict(action='set', did='light-1', model='test.light.v1', value=True, createdAt=self.now.isoformat()))
+        self.worker.requests(self.now)
+        self.assertEqual(phases, ['sending', 'checking', 'confirmed'])
+        self.assertEqual(self.worker.operations['success']['phase'], 'confirmed')
+        phases.clear();self.api.bad_read = True
+        hub.atomic(queue / 'failure.json', dict(action='set', did='light-1', model='test.light.v1', value=False, createdAt=self.now.isoformat()))
+        self.worker.requests(self.now)
+        self.assertEqual(phases, ['sending', 'checking', 'failed'])
+        self.assertEqual(hub.load(self.worker.operations_path, {})['failure']['phase'], 'failed')
+
+    def test_restart_never_claims_inflight_operation_succeeded(self):
+        self.worker.operation('unfinished', 'checking', 'waiting')
+        restarted = hub.Hub(self.tmp.name, api=self.api)
+        self.assertEqual(restarted.operations['unfinished']['phase'], 'failed')
+        self.assertFalse(self.api.commands)
+
+    def test_paused_hub_allows_read_only_refresh_but_never_switches(self):
+        self.worker.config['enabled'] = False
+        self.worker.discover = lambda: None
+        self.worker.read = lambda: None
+        queue = self.worker.private / 'queue';queue.mkdir(parents=True)
+        hub.atomic(queue / 'refresh.json', dict(action='refresh', createdAt=self.now.isoformat()))
+        self.worker.requests(self.now)
+        self.assertEqual(self.worker.operations['refresh']['phase'], 'confirmed')
+        hub.atomic(queue / 'switch.json', dict(action='set', did='light-1', model='test.light.v1', value=True, createdAt=self.now.isoformat()))
+        self.worker.requests(self.now)
+        self.assertEqual(self.worker.operations['switch']['phase'], 'failed')
+        self.assertFalse(self.api.commands)
+        self.assertFalse(self.worker.config['enabled'])
+
 
 if __name__ == '__main__':
     unittest.main()

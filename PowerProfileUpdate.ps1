@@ -51,6 +51,7 @@ function Test-ProfilePackage([string]$Directory,[string]$Version){
         if($file.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or -not(Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.sha256){throw "文件完整性校验失败：$($file.path)"}
     }
     foreach($required in @('version.json','Start-PowerProfile.ps1','PowerProfileTray.ps1','PowerProfile.ps1','PowerProfileUpdate.ps1','PowerProfileCState.ps1','USER_GUIDE.md')){if(-not $names.ContainsKey($required)){throw "更新包缺少：$required"}}
+    if([version]$Version -ge [version]'1.2.0'){foreach($required in @('PowerProfileWorkspace.cs','PowerProfileWorkspace.ps1','PowerProfileWorkspaceData.ps1','PowerProfileWorkspaceCharts.cs','PowerProfileConnectionUI.ps1','PowerProfileConnectionProbe.py')){if(-not $names.ContainsKey($required)){throw "工作台更新包缺少：$required"}}}
     if(@(Get-ChildItem $Directory -Recurse -File).Count -ne $count+1){throw '更新包有清单外文件。'}
     $info=Get-ProfileVersionInfo $Directory
     if($info.version -ne $Version -or $info.distribution -ne 'release'){throw '更新包不是正式分发版本。'}

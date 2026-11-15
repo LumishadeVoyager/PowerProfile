@@ -17,7 +17,7 @@ function Start-DeviceHubWorker {
     try{
         $status=Read-AtomicJson $statusPath
         if(([DateTime]::UtcNow-([DateTime]$status.observedAt).ToUniversalTime()).TotalSeconds -lt 180 -and (Get-Process -Id $status.pid -ErrorAction SilentlyContinue)){
-            if($status.codeVersion -eq 2){return}
+            if($status.codeVersion -eq 3){return}
             $old=Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$status.pid)"
             if($old.Name -match '^pythonw?\.exe$' -and $old.CommandLine -match [regex]::Escape((Join-Path $ScriptDir 'PowerProfileDeviceHub.py'))){Stop-Process -Id ([int]$status.pid) -Force}
         }
@@ -35,8 +35,10 @@ function Send-DeviceHubRequest([string]$Action,$Device=$null,$Value=$null,[bool]
         if($Action -eq 'set' -and $Value -eq $false -and (Test-HubPlug $Device) -and -not $PowerRiskAcknowledged){throw '请先确认插座断电风险。'}
         $request.did=$Device.did;$request.model=$Device.model;$request.value=$Value;$request.powerRiskAcknowledged=$PowerRiskAcknowledged
     }
-    Write-AtomicJson (Join-Path $queue (([Guid]::NewGuid().ToString())+'.json')) $request
+    $requestId=[Guid]::NewGuid().ToString()
+    Write-AtomicJson (Join-Path $queue ($requestId+'.json')) $request
     Start-DeviceHubWorker
+    return $requestId
 }
 function Format-HubMinute($Minute){if($null -eq $Minute){return '直到暂停'};return ('{0:00}:{1:00}' -f [int][Math]::Floor($Minute/60),($Minute%60))}
 function Get-HubRunAt($Rule){return [DateTimeOffset]::Parse($Rule.runAt,[Globalization.CultureInfo]::InvariantCulture).ToOffset([TimeSpan]::FromHours(8))}

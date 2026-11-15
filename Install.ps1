@@ -37,6 +37,7 @@ foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProf
 . (Join-Path $ScriptDir 'PowerProfileVersion.ps1')
 if(-not(Test-Path (Join-Path $ScriptDir 'settings.json'))){Copy-Item -LiteralPath (Join-Path $ScriptDir 'settings.example.json') -Destination (Join-Path $ScriptDir 'settings.json')}
 foreach($name in @('version.json','PowerProfileCState.ps1','PowerProfileUpdate.ps1','Check-PowerProfileUpdate.ps1','PowerProfileWelcomeUI.ps1','USER_GUIDE.md')){if(-not(Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
+foreach($name in @('PowerProfileWorkspace.cs','PowerProfileWorkspace.ps1','PowerProfileWorkspaceData.ps1','PowerProfileWorkspaceCharts.cs','PowerProfileConnectionUI.ps1','PowerProfileConnectionProbe.py')){if(-not(Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 Write-Host 'C-state 稳定性保护默认关闭；保留 Windows 原设置。现有配置不会被覆盖。' -ForegroundColor Cyan
 foreach($name in @('PowerProfileTelemetry.ps1','PowerProfileLogViewer.cs')){if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 foreach($name in @('PowerProfileEnergy.cs','PowerProfileEnergyUI.ps1','PowerProfileFileIO.cs')){if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
@@ -104,7 +105,7 @@ Write-Host "  蓝色电源图标 = 均衡模式" -ForegroundColor Cyan
 Write-Host "  红色电源图标 = 游戏模式；实际性能受硬件与温度限制" -ForegroundColor Red
 Write-Host ""
 Write-Host "使用方法:" -ForegroundColor Yellow
-Write-Host "  - 左键单击图标 = 打开运行状态"
+Write-Host "  - 左键单击图标 = 打开统一工作台"
 Write-Host "  - 右键单击图标 = 弹出菜单选模式"
 Write-Host "  - 双击图标 = 打开日志"
 Write-Host ""

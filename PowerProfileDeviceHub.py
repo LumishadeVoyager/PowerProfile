@@ -162,6 +162,16 @@ class Hub:
         self.devices = []
         self.events = []
         self.runtime = load(self.runtime_path, {})
+        self.operations_path = self.private / 'operations.json'
+        try:
+            self.operations = load(self.operations_path, {})
+            if not isinstance(self.operations, dict) or any(not isinstance(v, dict) for v in self.operations.values()):
+                self.operations = {}
+        except (ValueError, OSError):
+            self.operations = {}
+        for operation in self.operations.values():
+            if operation.get('phase') in ('sending', 'checking'):
+                operation.update(phase='failed', message='中枢重启，原操作结果未确认；请检查实际状态。')
         self.config = {'enabled': False, 'rules': []}
         self.message = '设备中枢等待连接'
         self.last_discovery = 0
@@ -177,9 +187,9 @@ class Hub:
         self.events = self.events[-60:]
 
     def publish(self):
-        body = {'pid': os.getpid(), 'codeVersion': 2,
+        body = {'pid': os.getpid(), 'codeVersion': 3,
             'message': self.message, 'devices': self.devices, 'events': self.events[-12:],
-            'rules': self.runtime, 'enabled': self.config['enabled']}
+            'rules': self.runtime, 'enabled': self.config['enabled'], 'operations': list(self.operations.values())[-30:]}
         digest = json.dumps(body, sort_keys=True)
         if digest == self.published and time.monotonic()-self.last_publish < 15:
             return
@@ -262,13 +272,21 @@ class Hub:
                 device['message'] = '连接失败 · 状态未知'
             raise
 
-    def set(self, device, desired):
+    def operation(self, ident, phase, message):
+        self.operations[ident] = dict(id=ident, phase=phase, message=message, observedAt=datetime.now(timezone.utc).isoformat())
+        self.operations = dict(list(self.operations.items())[-30:])
+        atomic(self.operations_path, self.operations)
+        self.publish()
+
+    def set(self, device, desired, operation_id=None):
         if type(desired) is not bool:
             raise ValueError('开关命令必须为布尔值')
         result = self.api.set_devices_prop(dict(self.prop(device), value=desired))
         rows = result if isinstance(result, list) else [result]
         if not any(str(r.get('did')) == device['did'] and r.get('siid') == device['switch']['siid'] and r.get('piid') == device['switch']['piid'] and type(r.get('code')) is int and r['code'] in (0, 1) for r in rows):
             raise ValueError('设备未确认指令')
+        if operation_id:
+            self.operation(operation_id, 'checking', '指令已确认，正在读取设备实际状态')
         actual = value_from(self.api.get_devices_prop(self.prop(device)), device)
         if actual != desired:
             raise ValueError('指令已发送，但开关读回不一致')
@@ -352,7 +370,9 @@ class Hub:
 
     def requests(self, now):
         for path in sorted((self.private / 'queue').glob('*.json'))[:20]:
+            operation_id = path.stem
             try:
+                self.operation(operation_id, 'sending', '正在处理设备操作')
                 request = load(path, {})
                 stamp = datetime.fromisoformat(request.get('createdAt', '').replace('Z', '+00:00'))
                 age = (now-stamp).total_seconds()
@@ -362,6 +382,8 @@ class Hub:
                     self.discover()
                     self.read()
                 elif request.get('action') == 'set':
+                    if not self.config['enabled']:
+                        raise ValueError('中枢已暂停，不执行设备开关操作')
                     device = self.target(request.get('did'), request.get('model'))
                     value = request.get('value')
                     if type(value) is not bool:
@@ -370,17 +392,20 @@ class Hub:
                     for rule in self.config['rules']:
                         if rule['enabled'] and rule['mode'] == 'guard' and rule['did'] == device['did'] and rule['value'] != value and guard_active(rule, now, self.runtime.get(rule['id'], {})):
                             raise ValueError('请先暂停该设备的保持状态任务')
-                    self.set(device, value)
+                    self.set(device, value, operation_id)
                     self.event(device['name']+'：手动指令已读回')
                 else:
                     raise ValueError('不支持的操作')
                 self.message = '设备操作完成'
+                self.operation(operation_id, 'confirmed', '已完成同步；状态以各设备实际读回为准' if request.get('action') == 'refresh' else '开关实际状态已读回并与请求一致')
             except ValueError as exc:
                 self.message = str(exc)
                 self.event(self.message)
+                self.operation(operation_id, 'failed', self.message)
             except Exception:
                 self.message = '设备操作失败 · 检查网络、网关或重新授权'
                 self.event(self.message)
+                self.operation(operation_id, 'failed', self.message)
             finally:
                 path.unlink(missing_ok=True)
 
@@ -401,6 +426,9 @@ class Hub:
                 try:
                     self.config = validate(load(self.config_path, {'enabled': False, 'rules': []}))
                     if not self.config['enabled']:
+                        if time.monotonic() >= self.retry_after and any((self.private / 'queue').glob('*.json')):
+                            self.connect()
+                            self.requests(now)
                         self.message = '设备中枢已暂停；不会执行设备任务'
                     elif time.monotonic() >= self.retry_after:
                         self.connect()

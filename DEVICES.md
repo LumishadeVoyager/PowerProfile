@@ -1,6 +1,6 @@
 # 米家设备中枢
 
-运行状态窗口的用电卡片提供“设备中枢”入口。首次使用需启用中枢；复用“米家历史”的扫码授权及 Windows DPAPI 加密会话，不要求明文密码或设备 Token。已有依赖通过 `Install-EnergyHistory.ps1` 安装，不新增 Home Assistant 服务。
+统一工作台从“设备 / 自动化”进入；独立硬件监测窗口仍提供“设备中枢”入口。首次使用需启用中枢；复用“米家历史”的扫码授权及 Windows DPAPI 加密会话，不要求明文密码或设备 Token。已有依赖通过 `Install-EnergyHistory.ps1` 安装，不新增 Home Assistant 服务。
 
 ## 支持范围
 

@@ -8,6 +8,7 @@ function Initialize-EnergyService {
         $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileEnergy.cs'))
         $source+="`r`n"+[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileEnergyTimeline.cs'))
         $source+="`r`n"+[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileUsageLogs.cs'))
+        $source+="`r`n"+[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileWorkspaceCharts.cs'))
         $store=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'PowerProfileFileIO.cs')).Replace('ProfileSnapshotIO','ProfileEnergyStore')
         # Compile the existing atomic snapshot implementation into this isolated adapter.
         $usings=([regex]::Matches(($store+"`r`n"+$source),'(?m)^using [^;]+;') | ForEach-Object {$_.Value} | Select-Object -Unique) -join "`r`n"

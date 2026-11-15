@@ -51,9 +51,9 @@ function New-WorkstationCombo {
 function Open-ModernDashboard {
     $ErrorActionPreference='Stop'
     try {
-        Show-ModernDashboard
-        if(-not [ProfileVisual]::IsWindowVisible($Script:Dashboard.Handle)){throw 'Windows 窗口可见性检查失败'}
-        Write-ProfileEvent 'ui.dashboard.open' '运行状态窗口已显示并激活' -Data @{handle=$Script:Dashboard.Handle.ToInt64()}
+        Show-ProfileWorkspace
+        if(-not [ProfileVisual]::IsWindowVisible($Script:Workspace.Handle)){throw 'Windows 窗口可见性检查失败'}
+        Write-ProfileEvent 'ui.dashboard.open' '统一工作台已显示并激活' -Data @{handle=$Script:Workspace.Handle.ToInt64()}
     }
     catch {
         Write-ProfileEvent 'ui.dashboard.failed' $_.Exception.Message 'ERROR' @{stack=$_.ScriptStackTrace;position=$_.InvocationInfo.PositionMessage}
@@ -376,3 +376,5 @@ function Show-ModernSettings {
     if($ReturnForm){return $form}
     [void]$form.ShowDialog();if($form.Icon){$form.Icon.Dispose()};$form.Dispose()
 }
+
+. (Join-Path $PSScriptRoot 'PowerProfileWorkspace.ps1')

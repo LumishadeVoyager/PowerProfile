@@ -1133,7 +1133,7 @@ $menuGame.Add_Click({
     Set-AutoEnabled $false
     Invoke-Worker -Mode 'Game'
 })
-$menuSettings.Add_Click({ Show-ModernSettings })
+$menuSettings.Add_Click({ Show-ProfileWorkspace -Page Settings })
 $menuMonitor.Add_Click({ Open-ModernDashboard })
 $menuLegacy.Add_Click({ Start-TrayVersionSwitch $ScriptDir 'Legacy' })
 $menuLog.Add_Click({
