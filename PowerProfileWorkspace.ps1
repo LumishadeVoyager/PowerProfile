@@ -40,6 +40,8 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
         if(Invoke-InsightsCommand $Action $Id){return}
         switch($Action){
             'Navigate'{$w.Navigate($Id);return}
+            'Motion'{$prefs=Get-WorkspacePreferences;$prefs.motion=$w.Motion.Checked;Save-WorkspacePreferences $prefs;return}
+            'GameColumns'{$show=-not $w.GameSessions.Columns[2].Visible;foreach($i in @(2,4,5,6,7)){$w.GameSessions.Columns[$i].Visible=$show};foreach($i in @(3,4,5)){$w.GameTotals.Columns[$i].Visible=$show};return}
             'Page'{$t.DeviceKey='';$t.ScheduleKey='';Update-ProfileWorkspace;return}
             'Theme'{$prefs=Get-WorkspacePreferences;$prefs.theme=@('System','Light','Dark')[[int]$Id];Save-WorkspacePreferences $prefs;$w.SetTheme([int]$Id);$t.Chart.DarkMode=[ProfileTheme]::Dark;$t.Chart.BackColor=[ProfileTheme]::Surface;$t.Chart.ForeColor=[ProfileTheme]::Text;$t.Chart.Invalidate();return}
             'TextSize'{$prefs=Get-WorkspacePreferences;$prefs.textScale=[int]$Id;Save-WorkspacePreferences $prefs;$page=$w.ActivePage;$w.Dispose();Show-ProfileWorkspace -Page $page;return}
@@ -105,8 +107,8 @@ function Update-ProfileWorkspace {
     $w.Metrics['power'].Set($(if($fresh -and $null -ne $State.Watts){'{0:N1} W' -f $State.Watts}else{'— W'}),(Get-EnergyStatusText $State))
     $w.Metrics['cost'].Set((Format-EnergyCost $State.TodayKWh $State.Price),(Get-EnergyPeriodCoverage $State $State.LocalDay))
     $todayUsage=if($State.UsageDays.ContainsKey($State.LocalDay)){$State.UsageDays[$State.LocalDay]}else{$null}
-    $w.Metrics['usage'].Set((Format-EnergyDuration $(if($todayUsage){$todayUsage.Seconds}else{$null})),'唤醒且监测正常 · 日志可补算')
-    $w.Metrics['game'].Set((Format-EnergyDuration $(if($todayUsage){$todayUsage.GameSeconds}else{$null})),$(if($null -ne $todayUsage.ModeGameSeconds){'包含游戏档会话推算 · 估'}else{'游戏识别覆盖内统计'}))
+    $w.Metrics['usage'].Set((Format-EnergyDuration $(if($todayUsage){$todayUsage.Seconds}else{$null})),'今日 · 有效监测')
+    $w.Metrics['game'].Set((Format-EnergyDuration $(if($todayUsage){$todayUsage.GameSeconds}else{$null})),$(if($null -ne $todayUsage.ModeGameSeconds){'今日 · 含日志推算'}else{'今日 · 游戏识别'}))
     $nextRule=@($hub.Config.rules|Where-Object {$future.Next.ContainsKey($_.id)}|Sort-Object {$future.Next[$_.id]}|Select-Object -First 1)
     if($nextRule.Count){$next=$future.Next[$nextRule[0].id];$holding=$hub.Fresh -and $nextRule[0].mode -eq 'guard' -and $hub.Status.rules.($nextRule[0].id).entered;$w.Metrics['next'].Set($(if($holding){'保持中'}else{$next.ToString('HH:mm')}),(Format-EnergyCalendarDate $next 'MM-dd')+' · '+$nextRule[0].name)}else{$w.Metrics['next'].Set('暂无',$(if($hub.Config.enabled){'未来七天无待执行任务'}else{'设备自动化已暂停'}))}
     $reason=if(Get-Command Read-GameDetectionState -ErrorAction SilentlyContinue){Read-GameDetectionState}else{$null}
@@ -115,7 +117,7 @@ function Update-ProfileWorkspace {
     $w.Runtime.Text="托盘：$(if($trayAlive){'运行中'}else{'未确认运行'}) · 自动化中枢：$(if(-not $hub.Config.enabled){'已暂停'}elseif($hub.Fresh){'运行中'}else{'响应过期 / 未连接'})`r`n插座：$(Get-EnergyStatusText $State) · $(if($State.ObservedAt -ne [DateTime]::MinValue){'最近读回 '+$State.ObservedAt.ToLocalTime().ToString('HH:mm:ss')}else{'尚无实际读回'})`r`n关闭工作台仅隐藏窗口；托盘与已启用的中枢仍继续工作。"
     $view=@('Day','Week','Month')[$w.Group.SelectedIndex];$count=if($view -eq 'Day'){@(7,30,90)[$w.Range.SelectedIndex]}elseif($view -eq 'Week'){@(4,8,12)[$w.Range.SelectedIndex]}else{@(3,6,12)[$w.Range.SelectedIndex]}
     $energyKey="$($State.ObservedAt.Ticks)|$($State.UsageUpdatedAt.Ticks)|$($State.Price)|$view|$count|$($State.Days.Count)|$($State.MonthKWh)"
-    if($t.EnergyKey -ne $energyKey){$t.EnergyKey=$energyKey;Update-WorkspaceInsights $State $view $count}
+    if($w.ActivePage -eq 'Energy' -and $t.EnergyKey -ne $energyKey){$t.EnergyKey=$energyKey;Update-WorkspaceInsights $State $view $count}
     if($w.ActivePage -eq 'Games'){$gameKey="$($State.UsageUpdatedAt.Ticks)|$($State.LocalDay)|$($State.UsageDays.Count)";if($t.GameKey -ne $gameKey){$t.GameKey=$gameKey;Update-WorkspaceGames $State}}
     if($w.ActivePage -eq 'Devices'){
         $prefs=Get-WorkspacePreferences;$groups=@('全部分组')+@($hub.Status.devices|ForEach-Object {$p=$prefs.devices.($_.did);if($p.room){$p.room}else{'未分组'}}|Sort-Object -Unique)
@@ -131,7 +133,7 @@ function Update-ProfileWorkspace {
             foreach($d in @($hub.Status.devices)){$label=$d.name+' · '+$d.model;$base=$label;$n=2;while($names.ContainsKey($label)){$label=$base+'（'+$n+'）';$n++};$names[$label]=$d.did}
             if((@($w.CalendarDevice.Items) -join '|') -ne (@($names.Keys|Sort-Object) -join '|')){$t.Suppress=$true;$w.CalendarDevice.Items.Clear();foreach($n in @($names.Keys|Sort-Object)){[void]$w.CalendarDevice.Items.Add($n)};$w.CalendarDevice.SelectedItem=if($names.ContainsKey([string]$selected)){$selected}else{'全部设备'};$t.Suppress=$false}
             $filter=$names[[string]$w.CalendarDevice.SelectedItem];$slots=@($plan.Slots|Where-Object {-not $filter -or $_.Device -eq $filter});foreach($slot in $slots){$device=@($hub.Status.devices|Where-Object {$_.did -eq $slot.Device})[0];if($device){$slot.Device=$device.name}}
-            $w.Calendar.WeekStart=$week;$w.Calendar.Slots.Clear();foreach($s in $slots){$w.Calendar.Slots.Add($s)};$max=1;for($i=0;$i -lt 7;$i++){$day=$week.AddDays($i);$n=@($slots|Where-Object {$_.Start.Date -le $day -and $_.End -gt $day}).Count;$max=[Math]::Max($max,$n)};$w.Calendar.Height=[Math]::Max(470,7*(32+22*$max)+35);$w.Calendar.Invalidate()
+            $w.Calendar.WeekStart=$week;$w.Calendar.Slots.Clear();foreach($s in $slots){$w.Calendar.Slots.Add($s)};$max=1;for($i=0;$i -lt 7;$i++){$day=$week.AddDays($i);$n=@($slots|Where-Object {$_.Start.Date -le $day -and $_.End -gt $day}).Count;$max=[Math]::Max($max,$n)};$w.Calendar.Height=[Math]::Max(350,7*(32+22*$max)+35);$w.Calendar.Invalidate()
             $selectedRule=if($w.RuleGrid.CurrentRow){[string]$w.RuleGrid.CurrentRow.Tag}else{''};$w.RuleGrid.Rows.Clear()
             foreach($r in @($hub.Config.rules|Where-Object {-not $filter -or $_.did -eq $filter})){$device=@($hub.Status.devices|Where-Object {$_.did -eq $r.did})[0];$status=if(-not $r.enabled -or -not $hub.Config.enabled){'已暂停'}elseif(-not $hub.Fresh){'中枢响应过期'}elseif($plan.Conflicts.ContainsKey($r.id)){'! 存在冲突'}elseif($hub.Status.rules.($r.id).message){$hub.Status.rules.($r.id).message}else{'等待执行'};$next=if($future.Next.ContainsKey($r.id)){(Format-EnergyCalendarDate $future.Next[$r.id] 'MM-dd')+' '+$future.Next[$r.id].ToString('HH:mm')+' · '}else{''};$i=$w.RuleGrid.Rows.Add([object[]]@($r.name,$(if($device){$device.name}else{'未同步设备'}),(Format-HubRule $r),($next+$status)));$w.RuleGrid.Rows[$i].Tag=$r.id;if($r.id -eq $selectedRule){$w.RuleGrid.CurrentCell=$w.RuleGrid.Rows[$i].Cells[0]}}
             $w.TaskInfo.Text="$(Format-EnergyCalendarDate $week) — $(Format-EnergyCalendarDate $week.AddDays(6)) · $(if($hub.Config.enabled -and $hub.Fresh){'● 中枢运行中'}elseif(-not $hub.Config.enabled){'Ⅱ 中枢已暂停'}else{'? 中枢响应过期'}) · 冲突 $($plan.Conflicts.Count) 项。时间轴为计划；是否执行以读回状态为准。"
@@ -143,7 +145,7 @@ function Show-ProfileWorkspace {
     param([string]$Page='Overview',[switch]$ReturnForm)
     if($Script:Workspace -and -not $Script:Workspace.IsDisposed){$Script:Workspace.Show();$Script:Workspace.Navigate($Page);[ProfileVisual]::ActivateDashboard($Script:Workspace.Handle);if($ReturnForm){return $Script:Workspace};return}
     Initialize-EnergyService
-    $prefs=Get-WorkspacePreferences;$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$w.MinimumSize=New-Object Drawing.Size 700,620;$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$w.Size=New-Object Drawing.Size ([Math]::Min($w.Width,$area.Width-30)),([Math]::Min($w.Height,$area.Height-40));$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$Script:Workspace=$w
+    $prefs=Get-WorkspacePreferences;$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$Script:Workspace=$w
     $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=2000
     $w.Tag=@{Chart=$chart;Timer=$timer;EnergyKey='';DeviceKey='';ScheduleKey='';EnergyData=@{Details=@{}};PendingRequest=$null;Suppress=$false}
@@ -155,6 +157,6 @@ function Show-ProfileWorkspace {
     $w.Add_Disposed({param($sender,$eventArgs) $sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose();if($sender.Icon){$sender.Icon.Dispose()};$Script:Workspace=$null})
     [Windows.Forms.Application]::add_ApplicationExit({if($Script:Workspace){$Script:Workspace.Dispose()}})
     $chart.DarkMode=[ProfileTheme]::Dark;$chart.BackColor=[ProfileTheme]::Surface;$chart.ForeColor=[ProfileTheme]::Text
-    Update-ProfileWorkspace;$w.Footer.Text='● 本机状态已读取 · 关闭窗口仅隐藏工作台 · F5 刷新';$timer.Start();$w.Navigate($Page)
+    Update-ProfileWorkspace;$w.Footer.Text='● 已就绪';$timer.Start();$w.Navigate($Page)
     if($ReturnForm){return $w};$w.Show();[ProfileVisual]::ActivateDashboard($w.Handle)
 }

@@ -7,7 +7,8 @@ function Get-WorkspacePreferences([string]$Root=(Get-WorkspaceRoot)){
     $metrics=if($null -ne $value.metrics){@($value.metrics | Where-Object {$_ -in @('mode','power','cost','usage','game','next')} | Select-Object -Unique)}else{@('mode','power','cost','usage','game','next')}
     $devices=if($value.devices){$value.devices}else{[PSCustomObject]@{}}
     $textScale=if($value.textScale -in @(100,125,150)){[int]$value.textScale}else{100}
-    return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices}
+    $motion=if($value.motion -is [bool]){[bool]$value.motion}else{$true}
+    return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices;motion=$motion}
 }
 function Save-WorkspacePreferences($Preferences,[string]$Root=(Get-WorkspaceRoot)){Write-AtomicJson (Join-Path $Root 'workspace.settings.json') $Preferences -Pretty}
 function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30,$From=$null,$To=$null,[int]$DayType=0){

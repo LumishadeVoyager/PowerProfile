@@ -32,6 +32,9 @@ try{
     $settingsHash=(Get-FileHash $SettingsPath).Hash;$hubHash=(Get-FileHash (Join-Path $root 'devices.hub.json')).Hash
     $w=Show-ProfileWorkspace -ReturnForm;$w.Tag.Timer.Stop();$w.Show();[Windows.Forms.Application]::DoEvents()
     Assert 'all six modules are in one native window' ($w.Pages.Count -eq 6 -and $w.Navigation.Count -eq 6)
+    Assert 'default workspace uses a light portrait canvas' ($w.ClientSize.Width -le 540 -and [Math]::Abs($w.ClientSize.Width/$w.ClientSize.Height-0.75) -lt 0.01)
+    Assert 'all destinations fit across top navigation' ($w.Navigation['Overview'].Parent -eq $w.NavigationStrip -and $w.Navigation['Settings'].Right -le $w.NavigationStrip.Width)
+    Assert 'long explanations and filters start collapsed' (-not $w.Sections['Runtime'].Expanded -and -not $w.Sections['EnergyFilters'].Expanded -and -not $w.Sections['GameEvidence'].Expanded)
     Assert 'actual fee and power appear in overview' ($w.Metrics['cost'].Value.Text -eq '¥0.35' -and $w.Metrics['power'].Value.Text -eq '82.0 W')
     Assert 'overview reason is tied to existing detection' ($w.OverviewReason.Text -like '*fixture game decision*')
     Assert 'overview cards wrap into visible rows' ($w.Metrics['next'].Bottom -le $w.MetricHost.Height -and $w.Metrics['next'].Right -le $w.MetricHost.Width)
@@ -68,8 +71,15 @@ try{
     $Script:fakeProbe.Success=$true;$Script:fakeProbe.Completed=$true;Update-WorkspaceConnection $wiz;Assert 'successful actual-read validation unlocks save' $wiz.SaveConnection.Enabled
     $wiz.Address.Text='192.168.1.10';Assert 'changing inputs invalidates prior validation' (-not $wiz.SaveConnection.Enabled -and $null -eq $wiz.Tag.Probe)
     $wiz.Close();$wiz.Dispose()
-    $w.Navigate('Overview');$w.ClientSize=New-Object Drawing.Size 720,640;[Windows.Forms.Application]::DoEvents()
+    $w.Navigate('Overview');$w.ClientSize=New-Object Drawing.Size 420,600;[Windows.Forms.Application]::DoEvents()
     Assert 'compact window keeps cards within content and exposes vertical scroll' ($w.Metrics['mode'].Right -le $w.MetricHost.Width -and $w.Pages['Overview'].VerticalScroll.Visible)
+    $w.Navigate('Energy');$w.ShowSection('EnergyFilters');[Windows.Forms.Application]::DoEvents()
+    Assert 'collapsed filters remain usable and expand within portrait content' ($w.Sections['EnergyFilters'].Expanded -and $w.Sections['EnergyFilters'].Height -gt 100 -and $w.LedgerSearch.Width -gt 100)
+    $w.Navigate('Settings');$w.Motion.Checked=$false
+    Assert 'motion preference persists and stops navigation animation' (-not (Get-WorkspacePreferences).motion -and -not $w.NavigationStrip.Animating)
+    $w.Motion.Checked=$true;$w.Navigate('Energy')
+    $watch=[Diagnostics.Stopwatch]::StartNew();while($watch.ElapsedMilliseconds -lt 240){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(10)}
+    Assert 'navigation animation finishes without a permanent timer' (-not $w.NavigationStrip.Animating)
     $w.Navigate('Settings');$w.TextSize.SelectedIndex=1;$w=$Script:Workspace;$w.Tag.Timer.Stop();[Windows.Forms.Application]::DoEvents()
     Assert 'text scaling persists and increases readable metric typography' ((Get-WorkspacePreferences).textScale -eq 125 -and $w.Metrics['mode'].Value.Font.Size -gt 22)
     $w.Dispose();$w=Show-ProfileWorkspace -ReturnForm;$w.Tag.Timer.Stop();Assert 'appearance and card preferences survive reopening' ([ProfileTheme]::Dark -and -not $w.MetricOptions['game'].Checked -and $w.TextSize.SelectedIndex -eq 1)

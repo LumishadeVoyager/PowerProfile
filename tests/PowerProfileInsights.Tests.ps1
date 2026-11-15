@@ -56,7 +56,8 @@ try{
     $html=[ProfileAnalyticsExport]::Report('Report','Scope','Summary',[string[]]@('<name>'),$rr)
     Assert 'offline report escapes log-controlled HTML' ($html.Contains('&lt;script&gt;x&lt;/script&gt;') -and -not $html.Contains('<script>'))
     $w=New-Object ProfileWorkspaceForm;$Script:Workspace=$w;$w.Tag=@{Suppress=$true;GameRows=$games;SessionDetails=@{}};$w.Show();$w.Navigate('Energy');[Windows.Forms.Application]::DoEvents()
-    $w.SetLedger($data.Rows.ToArray());$w.Ledger.Columns[2].Visible=$false;$table=Get-InsightsExportTable $w.Ledger
+    Assert 'portrait ledger initially prioritizes date and main metrics' ($w.Ledger.Columns[0].Visible -and $w.Ledger.Columns[2].Visible -and -not $w.Ledger.Columns[6].Visible)
+    $w.SetLedger($data.Rows.ToArray());foreach($column in $w.Ledger.Columns){$column.Visible=$true};$w.Ledger.Columns[2].Visible=$false;$table=Get-InsightsExportTable $w.Ledger
     Assert 'export uses current visible columns and displayed row order' ($table.Headers.Count -eq 6 -and $table.Headers -notcontains '电费' -and $table.Rows[0][0] -eq $data.Rows[0].Date)
     $heat=New-Object 'Collections.Generic.List[ProfileHeatDay]';foreach($r in $data.Rows){$h=New-Object ProfileHeatDay;$h.Date=$r.PeriodStart;$h.Value=$r.UsageSeconds;$heat.Add($h)};$w.Insights.Heatmap.Days=$heat;$w.Insights.Heatmap.Fit()
     $png=Join-Path $root 'chart.png';[ProfileAnalyticsExport]::SaveChart($w.Insights.Heatmap,$png,'Test','Missing is unknown');$bitmap=[Drawing.Image]::FromFile($png);try{Assert 'chart export produces an actual PNG with readable header and caption' ($bitmap.Width -eq $w.Insights.Heatmap.Width+48 -and $bitmap.Height -eq $w.Insights.Heatmap.Height+150)}finally{$bitmap.Dispose()}

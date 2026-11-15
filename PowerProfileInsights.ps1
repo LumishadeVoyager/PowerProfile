@@ -39,8 +39,18 @@ function Get-InsightsComparison($State,[DateTime]$Start,[DateTime]$End,[int]$Met
     $change=if($null -eq $a.Value -or $null -eq $b.Value){'样本不足，无法比较'}elseif($b.Value -eq 0){if($a.Value -eq 0){'均为零'}else{'上期为零，不计算百分比'}}else{'{0:+0.0;-0.0;0.0}%' -f (100*($a.Value-$b.Value)/$b.Value)}
     return "记录日均：周一至周五 $(Format-InsightsMean $weekday $Metric)；周六日 $(Format-InsightsMean $weekend $Metric)。`r`n本期 $(Format-EnergyCalendarDate $Start) — $(Format-EnergyCalendarDate $closedEnd)：$(Format-InsightsMean $a $Metric)`r`n上期 $(Format-EnergyCalendarDate $priorStart) — $(Format-EnergyCalendarDate $priorEnd)：$(Format-InsightsMean $b $Metric)；变化 $change。`r`n仅完整日期；零值参与均值，缺失剔除。星期分组不识别法定节假日；来源、搜索和质量筛选仅作用于下表 / 图表。"
 }
+function Get-InsightsBrief($State,[DateTime]$Start,[DateTime]$End,[int]$Metric,[int]$DayType=0){
+    $today=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);if($End -ge $today){$End=$today.AddDays(-1)}
+    if($End -lt $Start){return '今天尚未结束，暂无完整日期可比。'}
+    $count=($End-$Start).Days+1;$days=Get-WorkspaceEnergyData $State Day $count $Start $End;$last=Get-WorkspaceEnergyData $State Day $count $Start.AddDays(-$count) $Start.AddDays(-1)
+    $week=Get-InsightsMean $days.Rows $Metric 1;$weekend=Get-InsightsMean $days.Rows $Metric 2;$a=Get-InsightsMean $days.Rows $Metric $DayType;$b=Get-InsightsMean $last.Rows $Metric $DayType
+    $change=if($null -eq $a.Value -or $null -eq $b.Value){'上期样本不足'}elseif($b.Value -eq 0){'上期为零'}else{'较上期 {0:+0.0;-0.0;0.0}%' -f (100*($a.Value-$b.Value)/$b.Value)}
+    return "日均  周一至五 $(Format-InsightsValue $week.Value $Metric) · 周末 $(Format-InsightsValue $weekend.Value $Metric)`r`n$change · 仅已结束且有记录的日期"
+}
 function Update-WorkspaceInsights($State,[string]$Group,[int]$Count){
     $w=$Script:Workspace;$t=$w.Tag;$bounds=Get-InsightsBounds $State $Group $Count $w;$t.Bounds=$bounds
+    $filtering=$w.CustomDates.Checked -or $w.LedgerSearch.Text.Trim() -or $w.DayFilter.SelectedIndex -gt 0 -or $w.SourceFilter.SelectedIndex -gt 0 -or $w.QualityFilter.SelectedIndex -gt 0
+    $w.Sections['EnergyFilters'].Caption='筛选与显示'+$(if($filtering){' · 已应用'})
     $data=Get-WorkspaceEnergyData $State $Group $Count $bounds.Start $bounds.End $w.DayFilter.SelectedIndex
     $dayType=if($Group -eq 'Day'){$w.DayFilter.SelectedIndex}else{0}
     $rows=Select-InsightsRows $data.Rows $w.LedgerSearch.Text.Trim() $w.SourceFilter.SelectedIndex $w.QualityFilter.SelectedIndex $dayType
@@ -53,7 +63,7 @@ function Update-WorkspaceInsights($State,[string]$Group,[int]$Count){
     $daily=Get-WorkspaceEnergyData $State Day 1 $bounds.Start $bounds.End;$metric=$w.Insights.Metric.SelectedIndex;$heat=New-Object 'Collections.Generic.List[ProfileHeatDay]'
     $allowed=Select-InsightsRows $daily.Rows $w.LedgerSearch.Text.Trim() $w.SourceFilter.SelectedIndex $w.QualityFilter.SelectedIndex $w.DayFilter.SelectedIndex;$set=@{};foreach($row in $allowed){$set[$row.Key]=$true}
     foreach($row in $daily.Rows){$cell=New-Object ProfileHeatDay;$cell.Date=$row.PeriodStart;$cell.Value=Get-InsightsMetric $row $metric;$cell.Excluded=-not $set.ContainsKey($row.Key);$cell.Detail=(Format-InsightsValue $cell.Value $metric)+$(if($cell.Excluded){' · 已筛除'})+"`r`n"+$row.Explanation;$heat.Add($cell)}
-    $w.Insights.Heatmap.Days=$heat;$w.Insights.Heatmap.Metric=$metric;$w.Insights.Heatmap.Fit();$w.Insights.Comparison.Text=Get-InsightsComparison $State $bounds.Start $bounds.End $metric $w.DayFilter.SelectedIndex
+    $w.Insights.Heatmap.Days=$heat;$w.Insights.Heatmap.Metric=$metric;$w.Insights.Heatmap.Fit();$w.Insights.Comparison.Text=Get-InsightsComparison $State $bounds.Start $bounds.End $metric $w.DayFilter.SelectedIndex;$w.Insights.Summary.Text=Get-InsightsBrief $State $bounds.Start $bounds.End $metric $w.DayFilter.SelectedIndex
     $w.Insights.PerformLayout()
 }
 function Get-WorkspaceGameRows($State,[DateTime]$Start,[DateTime]$End,[string]$Search=''){
@@ -111,7 +121,7 @@ function Invoke-InsightsCommand([string]$Action,[string]$Id){
             $menu=New-Object Windows.Forms.ContextMenuStrip;foreach($c in $w.Ledger.Columns){$item=New-Object Windows.Forms.ToolStripMenuItem;$item.Text=$c.HeaderText;$item.Checked=$c.Visible;$item.CheckOnClick=$true;$item.Enabled=$c.Index -ne 0;$item.Tag=$c.Index;$item.Add_CheckedChanged({param($sender,$eventArgs) $Script:Workspace.Ledger.Columns[[int]$sender.Tag].Visible=$sender.Checked});[void]$menu.Items.Add($item)};$menu.Add_Closed({param($sender,$eventArgs) $sender.Dispose()});$menu.Show([Windows.Forms.Cursor]::Position);return $true
         }
         'HeatDate'{
-            $date=[DateTime]::ParseExact($Id,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);$t.Suppress=$true;try{$w.Group.SelectedIndex=0;$w.CustomDates.Checked=$true;$w.FromDate.Value=$date;$w.ToDate.Value=$date;$w.LedgerSearch.Clear();$w.DayFilter.SelectedIndex=0;$w.SourceFilter.SelectedIndex=0;$w.QualityFilter.SelectedIndex=0}finally{$t.Suppress=$false};$t.EnergyKey='';Update-ProfileWorkspace;$w.SelectLedger($Id);$w.Pages['Energy'].ScrollControlIntoView($w.Ledger);return $true
+            $date=[DateTime]::ParseExact($Id,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);$t.Suppress=$true;try{$w.Group.SelectedIndex=0;$w.CustomDates.Checked=$true;$w.FromDate.Value=$date;$w.ToDate.Value=$date;$w.LedgerSearch.Clear();$w.DayFilter.SelectedIndex=0;$w.SourceFilter.SelectedIndex=0;$w.QualityFilter.SelectedIndex=0}finally{$t.Suppress=$false};$w.ShowSection('EnergyFilters');$t.EnergyKey='';Update-ProfileWorkspace;$w.SelectLedger($Id);$w.Pages['Energy'].ScrollControlIntoView($w.Ledger);return $true
         }
         'GamesFilter'{$t.GameKey='';Update-ProfileWorkspace;return $true}
         'GameSelect'{if($Id){$t.Suppress=$true;try{Set-WorkspaceGameSessions @($t.GameRows|Where-Object Name -eq $Id)}finally{$t.Suppress=$false}};return $true}
