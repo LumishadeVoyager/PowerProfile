@@ -6,6 +6,21 @@ if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScri
 . (Join-Path $PSScriptRoot 'PowerProfileAI.ps1')
 $Script:Workspace=$null
 $skinOptions=Get-WorkspacePreferences;[ProfileSkin]::Set($skinOptions.skin);[ProfileTheme]::Dark=($skinOptions.theme -eq 'Dark' -or ($skinOptions.theme -eq 'System' -and [ProfileTheme]::SystemDark()));[ProfileSkin]::SystemBlur=$skinOptions.glass;[ProfileSkin]::MonitorWindows()
+# Fixed read-only views for tray requests; no arbitrary commands or paths are accepted.
+function Open-WorkspaceAIView {
+    param([ValidateSet('Tokens','Costs','Combined')][string]$View='Tokens')
+    Show-ProfileWorkspace -Page $(if($View -eq 'Combined'){'Energy'}else{'AI'})
+    $w=$Script:Workspace;$t=$w.Tag;$suppressed=$t.Suppress;$t.Suppress=$true
+    try{
+        $w.AIClient.SelectedIndex=0;$w.AICurrency.SelectedItem='USD';$w.AISource.SelectedIndex=$(if($View -eq 'Costs'){1}else{0})
+        $w.AIView.SelectedIndex=$(if($View -eq 'Costs'){1}else{0});$w.AIRange.SelectedIndex=$(if($View -eq 'Costs'){3}else{1})
+        if($View -eq 'Combined'){$w.AnalysisMode.SelectedIndex=1}
+    }finally{$t.Suppress=$suppressed}
+    $t.AIKey='';$t.AIOverlayKey='';Update-ProfileWorkspace
+    # A user-requested tray view should be visible even when the hidden host lacks focus.
+    $topmost=$w.TopMost;try{$w.TopMost=$true;$w.BringToFront()}finally{$w.TopMost=$topmost}
+    [ProfileVisual]::ActivateDashboard($w.Handle)
+}
 function Show-WorkspaceDialog($Form){
     [ProfileWorkspaceForm]::ScaleDialog($Form,(Get-WorkspacePreferences).textScale)
     [ProfileTheme]::Apply($Form,[ProfileTheme]::Dark)

@@ -89,6 +89,10 @@ try{
     $w.Skin.SelectedIndex=0;$w.Navigate('AI');$w.AIView.SelectedIndex=0
     $pixels=New-Object Drawing.Bitmap $w.Width,$w.Height;try{$w.DrawToBitmap($pixels,(New-Object Drawing.Rectangle 0,0,$pixels.Width,$pixels.Height));Assert 'liquid scene and charts render in the full portrait window' ($pixels.Width -gt 400 -and $w.AITokens.Value.Height -ge $w.AITokens.Value.Font.Height)}finally{$pixels.Dispose()}
     $w.Skin.SelectedIndex=1
+    $viewPrefsHash=(Get-FileHash (Join-Path $root 'workspace.settings.json')).Hash
+    Open-WorkspaceAIView 'Costs';Assert 'fixed fee view opens actual data without saving transient source selection' ($w.ActivePage -eq 'AI' -and $w.AISource.SelectedIndex -eq 1 -and $w.AIView.SelectedIndex -eq 1 -and $w.AIRange.SelectedIndex -eq 3)
+    Open-WorkspaceAIView 'Combined';Assert 'fixed combined view opens token overlay without device actions' ($w.ActivePage -eq 'Energy' -and $w.Tag.Chart.AnalyticsMode -eq 1 -and $w.AISource.SelectedIndex -eq 0)
+    Open-WorkspaceAIView 'Tokens';Assert 'fixed view navigation preserves saved appearance and filter preferences' ($w.ActivePage -eq 'AI' -and $w.AIView.SelectedIndex -eq 0 -and (Get-FileHash (Join-Path $root 'workspace.settings.json')).Hash -eq $viewPrefsHash -and -not $w.TopMost)
     $w.MetricOptions['game'].Checked=$false;Assert 'card preference persists separately' ((Get-WorkspacePreferences).metrics -notcontains 'game')
     $prefs=Get-WorkspacePreferences;$prefs.devices|Add-Member -NotePropertyName 'lamp' -NotePropertyValue ([PSCustomObject]@{alias='Desk lamp';room='Study';favorite=$true});Save-WorkspacePreferences $prefs
     $w.Navigate('Devices');Assert 'device cards replace raw device table' ($w.DeviceHost.Controls.Count -eq 2)
