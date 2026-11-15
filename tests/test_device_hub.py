@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 
 MODULE = Path(__file__).resolve().parents[1] / 'PowerProfileDeviceHub.py'
@@ -104,7 +106,106 @@ class HubTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.worker.target('other-device', 'test.light.v1')
         with self.assertRaises(ValueError):
-            hub.validate(dict(enabled=True, rules=[rule(model='cuco.plug.v3')]))
+            hub.require_power_ack(dict(model='cuco.plug.v3'), False, None)
+
+    def test_plug_off_requires_ack_but_same_model_is_not_read_only(self):
+        self.target.update(model='cuco.plug.v3', isPlug=True, computerPower=True)
+        task = rule(model='cuco.plug.v3', mode='once', powerRiskAcknowledged=True)
+        self.worker.config = hub.validate(dict(enabled=True, rules=[task]))
+        self.assertIs(self.worker.target('light-1', 'cuco.plug.v3'), self.target)
+        self.worker.schedule(self.now)
+        self.assertEqual(self.api.commands, [False])
+        self.worker.config['rules'][0].pop('powerRiskAcknowledged')
+        self.worker.runtime.clear()
+        self.worker.schedule(self.now)
+        self.assertEqual(self.api.commands, [False])
+        self.assertNotIn('lastVerified', self.worker.runtime['night'])
+
+    def test_manual_plug_off_cannot_bypass_risk_confirmation(self):
+        self.target.update(model='cuco.plug.v3', isPlug=True)
+        self.worker.config['rules'] = []
+        queue = self.worker.private / 'queue';queue.mkdir(parents=True)
+        request = dict(action='set', did='light-1', model='cuco.plug.v3', value=False, createdAt=self.now.isoformat())
+        hub.atomic(queue / 'off.json', request);self.worker.requests(self.now)
+        self.assertFalse(self.api.commands)
+        request['powerRiskAcknowledged'] = True
+        hub.atomic(queue / 'off.json', request);self.worker.requests(self.now)
+        self.assertEqual(self.api.commands, [False])
+
+    def test_legacy_unconfirmed_plug_task_does_not_block_other_devices(self):
+        plug = dict(self.target, did='plug', model='lumi.acpartner.mcn02', isPlug=True)
+        self.worker.devices.append(plug)
+        self.worker.config = hub.validate(dict(enabled=True, rules=[rule(id='plug', did='plug', model=plug['model']), rule()]))
+        self.worker.schedule(self.now)
+        self.assertIn('确认', self.worker.runtime['plug']['message'])
+        self.assertEqual(self.api.commands, [False])
+        self.assertIn('lastVerified', self.worker.runtime['night'])
+
+    def test_discovery_marks_only_matching_device_as_computer_plug(self):
+        urn = 'urn:miot-spec-v2:device:outlet:0000A002:test:1'
+        prop = dict(iid=1, type='urn:miot-spec-v2:property:on:00000006:x:1', format='bool', access=['read', 'write'])
+        spec = dict(type=urn, services=[dict(iid=2, type='urn:miot-spec-v2:service:outlet:00007802:x:1', properties=[prop])])
+        cache = self.worker.private / 'specs' / (hub.hashlib.sha256(urn.encode()).hexdigest()+'.json')
+        hub.atomic(cache, spec)
+        hub.atomic(self.worker.root / 'energy.settings.json', dict(DeviceId='plug-a'))
+        self.api.get_devices_list = lambda: [dict(did=d, name=d, model='cuco.plug.v3', isOnline=True, spec_type=urn) for d in ('plug-a', 'plug-b')]
+        with patch.dict('sys.modules', requests=SimpleNamespace()):
+            self.worker.discover()
+        self.assertTrue(self.worker.devices[0]['computerPower'])
+        self.assertFalse(self.worker.devices[1]['computerPower'])
+        for device in self.worker.devices:
+            self.assertTrue(device['isPlug'])
+            self.assertEqual(device['switch'], dict(siid=2, piid=1))
+
+    def test_selected_weekdays_and_cross_midnight_origin_day(self):
+        monday = self.now.replace(day=16, hour=23)
+        task = rule(startMinute=1380, endMinute=420, days=[1])
+        self.assertTrue(hub.guard_active(task, monday, {}))
+        self.assertTrue(hub.guard_active(task, monday+timedelta(hours=2), {}))
+        self.assertFalse(hub.guard_active(task, monday+timedelta(days=1), {}))
+        self.worker.config['rules'] = [rule(mode='once', days=[1])]
+        self.worker.schedule(self.now)
+        self.assertFalse(self.api.commands)
+        self.worker.schedule(self.now+timedelta(days=1))
+        self.assertEqual(self.api.commands, [False])
+
+    def test_dated_countdown_fires_once_and_persists_after_restart(self):
+        task = rule(mode='at', runAt=(self.now+timedelta(minutes=30)).isoformat())
+        self.worker.config = hub.validate(dict(enabled=True, rules=[task]))
+        self.worker.schedule(self.now)
+        self.assertFalse(self.api.commands)
+        self.worker.schedule(self.now+timedelta(minutes=30, seconds=15))
+        self.assertEqual(self.api.commands, [False])
+        self.worker.runtime = hub.load(self.worker.runtime_path, {})
+        self.worker.schedule(self.now+timedelta(minutes=31))
+        self.assertEqual(self.api.commands, [False])
+        self.assertTrue(self.worker.runtime['night']['completed'])
+        self.worker.config['rules'][0]['revision'] = 'after-pause-resume'
+        self.worker.schedule(self.now+timedelta(minutes=31, seconds=15))
+        self.assertEqual(self.api.commands, [False])
+
+    def test_dated_overdue_task_does_not_cut_power_after_wake(self):
+        self.worker.config['rules'] = [rule(mode='at', runAt=self.now.isoformat())]
+        self.worker.schedule(self.now+timedelta(minutes=3))
+        self.assertFalse(self.api.commands)
+        self.assertTrue(self.worker.runtime['night']['completed'])
+        self.assertIn('错过', self.worker.runtime['night']['message'])
+
+    def test_weekly_and_dated_conflicts_respect_actual_days(self):
+        night = rule(days=[1], startMinute=1380, endMinute=420)
+        monday_on = rule(id='on', mode='once', days=[1], startMinute=120, value=True)
+        tuesday_on = dict(monday_on, days=[2])
+        self.assertFalse(hub.rules_conflict(night, monday_on))
+        self.assertTrue(hub.rules_conflict(night, tuesday_on))
+        dated = rule(id='dated', mode='at', value=True, runAt='2026-11-17T02:00:00+08:00')
+        self.assertTrue(hub.rules_conflict(night, dated))
+        dated['runAt'] = '2026-11-16T02:00:00+08:00'
+        self.assertFalse(hub.rules_conflict(night, dated))
+
+    def test_invalid_days_or_unzoned_dates_rejected(self):
+        for values in (dict(days=[]), dict(days=[0]), dict(days=[True]), dict(days=[1, 1]), dict(days=[{}]), dict(mode='at', runAt='2026-11-15T01:00:00')):
+            with self.assertRaises(ValueError):
+                hub.validate(dict(enabled=True, rules=[rule(**values)]))
 
     def test_opposing_overlapping_rules_rejected_but_daytime_once_allowed(self):
         with self.assertRaises(ValueError):

@@ -222,6 +222,7 @@ function Show-EnergyDetails {
     $fields=@{}
     $title=New-ModernLabel '电费与用电' 20 16 340;$title.Font=New-Object Drawing.Font 'Microsoft YaHei UI',17,([Drawing.FontStyle]::Bold);$title.Height=36;$form.Controls.Add($title)
     $subtitle=New-ModernLabel '电脑专用插座 · 北京时间 · 固定电价估算' 22 57 530;$subtitle.ForeColor=[Drawing.Color]::FromArgb(111,122,132);$form.Controls.Add($subtitle)
+    $schedule=New-EnergyButton '插座开关与定时…' 552 22 188;$schedule.Add_Click({Show-DeviceHub});$form.Controls.Add($schedule)
     $fields.status=New-ModernLabel '未连接' 760 22 260;$fields.status.TextAlign='MiddleRight';$form.Controls.Add($fields.status)
     $fields.updated=New-ModernLabel '' 710 57 310;$fields.updated.TextAlign='MiddleRight';$fields.updated.Font=New-Object Drawing.Font 'Microsoft YaHei UI',8;$form.Controls.Add($fields.updated)
     $i=0
