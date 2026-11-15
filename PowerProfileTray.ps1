@@ -1286,5 +1286,6 @@ Update-TrayIcon
 
 Write-AtomicJson (Join-Path $ScriptDir 'tray_ready.json') @{processId=$PID;version='Modern';observedAt=[DateTime]::UtcNow.ToString('o')}
 Write-LifecycleLog '[READY] Modern tray UI initialized'
+Initialize-ProfileDistribution
 
 [System.Windows.Forms.Application]::Run()

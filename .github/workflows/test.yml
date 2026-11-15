@@ -16,9 +16,16 @@ jobs:
             if ($errors.Count) { throw ($errors | Out-String) }
           }
           # UI suites define callbacks and mock workers; isolate their process state.
-          foreach ($suite in @('Detection','UI','Settings','Energy','UsageLogs','DeviceHub','Workstation','Telemetry','LogViewer','FileIO','Game')) {
+          foreach ($suite in @('Distribution','Detection','UI','Settings','Energy','UsageLogs','DeviceHub','Workstation','Telemetry','LogViewer','FileIO','Game')) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tests\PowerProfile$suite.Tests.ps1"
             if ($LASTEXITCODE -ne 0) { throw "Failed suite: $suite" }
           }
           python -m unittest discover -s tests -p 'test_*.py'
           if ($LASTEXITCODE -ne 0) { throw 'Python tests failed' }
+      - name: Build clean distribution package
+        shell: powershell
+        run: .\Build-Release.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PowerProfile-windows
+          path: dist/*

@@ -10,6 +10,7 @@ $Script:LogViewer=$null
 $Script:DashboardTip=New-Object Windows.Forms.ToolTip
 . (Join-Path $ScriptDir 'PowerProfileEnergyUI.ps1')
 . (Join-Path $ScriptDir 'PowerProfileDeviceHubUI.ps1')
+. (Join-Path $ScriptDir 'PowerProfileWelcomeUI.ps1')
 
 function Get-ModernUIOptions {
     $o=@{toastEnabled=$true}
@@ -324,9 +325,11 @@ function Show-ModernSettings {
     $general.Controls.Add((New-ModernLabel '附加省电的日期、时段与等待条件在“省电计划”。' 18 187 410))
     $general.Controls.Add((New-ModernLabel '插座连接、电价及用电记录在“电费与用电”。' 18 229 410))
     $general.Controls.Add((New-ModernLabel '关闭看板后，插座监测仍在托盘后台运行。' 18 271 410))
-    $legacy=New-Object Windows.Forms.Button;$legacy.Text='切换为旧版';$legacy.SetBounds(18,280,180,32);$smart.Controls.Add($legacy)
+    $welcome=New-EnergyButton '使用指南与自动更新…' 18 315 260;$welcome.Add_Click({Show-ProfileWelcome});$general.Controls.Add($welcome)
+    $cstate=New-EnergyButton 'C-state 稳定性保护…' 18 268 260;$cstate.Add_Click({Show-CStateProtection});$smart.Controls.Add($cstate)
+    $legacy=New-Object Windows.Forms.Button;$legacy.Text='切换为旧版';$legacy.SetBounds(18,309,180,32);$smart.Controls.Add($legacy)
     $legacy.Add_Click({Start-TrayVersionSwitch $ScriptDir 'Legacy'})
-    $smart.Controls.Add((New-ModernLabel '旧版代码与配置独立保存，可随时返回。' 18 327 410))
+    $smart.Controls.Add((New-ModernLabel '旧版代码与配置独立保存，可随时返回。' 18 347 410))
     $w=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
     $enabled=New-Object Windows.Forms.CheckBox;$enabled.Text='启用工作时段附加省电';$enabled.Checked=$w.enabled;$enabled.SetBounds(18,15,370,26);$plan.Controls.Add($enabled)
     $plan.Controls.Add((New-ModernLabel '生效日期' 18 57 130))

@@ -26,3 +26,8 @@ devices.hub.json
 usage.logs.history.json
 auto_load_state.json
 __pycache__/
+cstate.settings.json
+updates.settings.json
+onboarding.json
+.updates/
+dist/

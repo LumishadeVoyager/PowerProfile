@@ -35,6 +35,9 @@ foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProf
     if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}
 }
 . (Join-Path $ScriptDir 'PowerProfileVersion.ps1')
+if(-not(Test-Path (Join-Path $ScriptDir 'settings.json'))){Copy-Item -LiteralPath (Join-Path $ScriptDir 'settings.example.json') -Destination (Join-Path $ScriptDir 'settings.json')}
+foreach($name in @('version.json','PowerProfileCState.ps1','PowerProfileUpdate.ps1','Check-PowerProfileUpdate.ps1','PowerProfileWelcomeUI.ps1','USER_GUIDE.md')){if(-not(Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
+Write-Host 'C-state 稳定性保护默认关闭；保留 Windows 原设置。现有配置不会被覆盖。' -ForegroundColor Cyan
 foreach($name in @('PowerProfileTelemetry.ps1','PowerProfileLogViewer.cs')){if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 foreach($name in @('PowerProfileEnergy.cs','PowerProfileEnergyUI.ps1','PowerProfileFileIO.cs')){if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 Initialize-LegacyConfiguration $ScriptDir

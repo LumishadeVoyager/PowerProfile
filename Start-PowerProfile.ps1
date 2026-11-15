@@ -10,7 +10,17 @@ if(Test-Path $requestPath){
     Remove-Item -LiteralPath $requestPath
     if($requested -in @('Modern','Legacy')){Start-TrayVersionSwitch $PSScriptRoot $requested;return}
 }
+$startupMutex=New-Object Threading.Mutex($false,'Global\PowerProfile_Startup')
+$startupLocked=$false
+try {
+try{$startupLocked=$startupMutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$startupLocked=$true}
+if(-not $startupLocked){return}
 if ($Version -eq 'Selected') { $Version=Get-SelectedTrayVersion $PSScriptRoot }
+if(Test-Path (Join-Path $PSScriptRoot 'PowerProfileUpdate.ps1')){
+    . (Join-Path $PSScriptRoot 'PowerProfileUpdate.ps1')
+    try {if($Version -eq 'Modern'){Install-ProfilePendingUpdate $PSScriptRoot}}
+    catch {Add-Content (Join-Path $PSScriptRoot 'tray_lifecycle.log') -Value "[UPDATE ERROR] $_" -Encoding UTF8}
+}
 if ($Version -eq 'Legacy') {
     $statePath=Join-Path $PSScriptRoot 'workstation_state.json'
     if((Test-Path $statePath) -and (Read-AtomicJson $statePath).active){Start-TrayVersionSwitch $PSScriptRoot 'Legacy';return}
@@ -24,3 +34,4 @@ catch {
     if($Version -eq 'Modern'){Start-TrayVersionSwitch $PSScriptRoot 'Legacy'}
     throw
 }
+} finally {if($startupLocked){$startupMutex.ReleaseMutex()};$startupMutex.Dispose()}
