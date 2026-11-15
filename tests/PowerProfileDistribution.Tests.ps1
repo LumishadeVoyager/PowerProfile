@@ -34,6 +34,7 @@ try {
     $zip=Join-Path $out 'PowerProfile-2.0.0-windows.zip';$package=Join-Path $tmp 'package'
     Expand-ProfilePackage $zip $package;$manifest=Test-ProfilePackage $package '2.0.0'
     Assert 'release ZIP has program files and manual' (@($manifest.files).Count -gt 30)
+    Assert 'versioned release notes are bundled' (Test-Path (Join-Path $package 'RELEASE_NOTES_1.0.0.md'))
     foreach($private in $privateFiles){Assert "package excludes $private" (-not(Test-Path (Join-Path $package $private)))}
     Assert 'release enables default OTA' ((Get-ProfileUpdateOptions $package).enabled)
     Assert 'source checkout defaults OTA off' (-not (Get-ProfileUpdateOptions $project).enabled)

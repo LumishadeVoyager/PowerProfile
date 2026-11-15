@@ -13,7 +13,7 @@ function Get-ProfileUpdateOptions([string]$Root){
 }
 function Test-ProfilePackagePath([string]$Path){
     # Data/configuration, helper scratch files and credentials can never be shipped.
-    return $Path -cmatch '^(PowerProfile[A-Za-z0-9]*\.(ps1|cs|py)|[A-Z][A-Z_-]*\.md|version\.json|settings\.example\.json|workdays\.\d{4}\.json|Install(-EnergyHistory)?\.ps1|Uninstall\.ps1|Start-PowerProfile\.ps1|Check-PowerProfileUpdate\.ps1|Start-Tray\.vbs|_restart_tray\.ps1|Analyze-Usage\.ps1|legacy/PowerProfile(Tray|Detection|Logic)?\.ps1)$'
+    return $Path -cmatch '^(PowerProfile[A-Za-z0-9]*\.(ps1|cs|py)|[A-Z][A-Z_-]*\.md|RELEASE_NOTES_\d+\.\d+\.\d+\.md|version\.json|settings\.example\.json|workdays\.\d{4}\.json|Install(-EnergyHistory)?\.ps1|Uninstall\.ps1|Start-PowerProfile\.ps1|Check-PowerProfileUpdate\.ps1|Start-Tray\.vbs|_restart_tray\.ps1|Analyze-Usage\.ps1|legacy/PowerProfile(Tray|Detection|Logic)?\.ps1)$'
 }
 function Get-ProfileRelease {
     [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
