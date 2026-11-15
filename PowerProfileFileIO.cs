@@ -13,12 +13,42 @@ public static class ProfileSnapshotIO
         {
             try
             {
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete))
-                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
-                    return reader.ReadToEnd();
+                return ReadCore(path);
             }
-            catch (IOException) { if (attempt >= 11) throw; Thread.Sleep(40); }
+            catch (IOException) { if (attempt >= 11) return ReadBetweenWriters(path); Thread.Sleep(40); }
+        }
+    }
+
+    static string ReadCore(string path)
+    {
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete))
+        using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+            return reader.ReadToEnd();
+    }
+
+    static string ReadBetweenWriters(string path)
+    {
+        string key;
+        using (var hash = SHA256.Create())
+            key = BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Path.GetFullPath(path).ToUpperInvariant()))).Replace("-", "");
+        // A rapid sequence of ReplaceFile calls can starve a lock-free reader.
+        // Only after short retries, share the writers' mutex to obtain a quiet slot.
+        using (var mutex = new Mutex(false, @"Global\PowerProfile_Snapshot_" + key))
+        {
+            bool held = false;
+            try
+            {
+                try { held = mutex.WaitOne(2000); }
+                catch (AbandonedMutexException) { held = true; }
+                if (!held) throw new IOException("Snapshot reader timeout: " + path);
+                for (int attempt = 0; ; attempt++)
+                {
+                    try { return ReadCore(path); }
+                    catch (IOException) { if (attempt >= 19) throw; Thread.Sleep(40); }
+                }
+            }
+            finally { if (held) mutex.ReleaseMutex(); }
         }
     }
 

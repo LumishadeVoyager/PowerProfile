@@ -28,6 +28,15 @@ using System;
 using System.IO;
 using System.Threading;
 public static class SnapshotTestLock {
+    public static void HoldExclusive(string path) {
+        var ready = new ManualResetEvent(false);
+        var thread = new Thread(() => {
+            using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                ready.Set(); Thread.Sleep(700);
+            }
+        });
+        thread.Start(); ready.WaitOne(); ready.Dispose();
+    }
     public static void Hold(string path) {
         var ready = new ManualResetEvent(false);
         var thread = new Thread(() => {
@@ -43,6 +52,10 @@ public static class SnapshotTestLock {
     $watch=[Diagnostics.Stopwatch]::StartNew()
     Write-AtomicJson $path @{sequence=3}
     Assert-True 'transient incompatible reader is retried' ($watch.ElapsedMilliseconds -ge 180 -and (Read-AtomicJson $path).sequence -eq 3)
+    [SnapshotTestLock]::HoldExclusive($path)
+    $watch.Restart()
+    $afterContention=Read-AtomicJson $path
+    Assert-True 'reader survives a replacement lock beyond the fast retry window' ($watch.ElapsedMilliseconds -ge 600 -and $afterContention.sequence -eq 3)
     foreach($role in @('writer1','writer2','reader')) {
         $jobs+=Start-Job -ArgumentList $project,$path,$role -ScriptBlock {
             param($project,$path,$role)
