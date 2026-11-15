@@ -125,7 +125,7 @@ function Update-EnergyDetails {
     $f.hint.Text=if($state.Configured){$state.Status}else{'尚未连接 · 点击“连接与电价”设置插座'}
     $Script:DashboardTip.SetToolTip($f.hint,$state.Status)
     $hasCloud=@($state.Days.Values | Where-Object {$_.Source -eq 'MiHome'}).Count -gt 0
-    $f.coverage.Text='费用优先米家历史；使用 / 游戏复用运行日志估算（缺口不补）；高功耗 ≥150 W；* 为部分覆盖。'
+    $f.coverage.Text='使用 / 游戏复用日志；高功耗含游戏档推算（估），不等于全部实测 ≥150 W；* 为部分覆盖。'
     $f.updated.Text=if($state.ObservedAt -ne [DateTime]::MinValue){"采样 $([TimeZoneInfo]::ConvertTimeFromUtc($state.ObservedAt,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')).ToString('HH:mm:ss')) · 每分钟更新"}else{'连接插座后开始采样'}
     $f.switch.Enabled=$fresh -and $null -ne $state.On -and -not $state.Busy
     $f.switch.Text=if($state.On -eq $false){'开启插座'}else{'关闭插座'};$f.refresh.Enabled=$state.Configured -and -not $state.Busy
@@ -147,11 +147,16 @@ function Update-EnergyDailyRows {
         $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
         $start=switch($view){'Week'{$date.AddDays(-(([int]$date.DayOfWeek+6)%7))};'Month'{$date.AddDays(1-$date.Day)};default{$date}}
         $groupKey=$start.ToString('yyyy-MM-dd')
-        if(-not $usage.ContainsKey($groupKey)){$usage[$groupKey]=@{Seconds=0.0;High=$null;Coverage=0.0;Game=$null;GameCoverage=0.0;FromLogs=$false}}
+        if(-not $usage.ContainsKey($groupKey)){$usage[$groupKey]=@{Seconds=0.0;High=$null;Coverage=0.0;Game=$null;GameCoverage=0.0;FromLogs=$false;ModeGame=$null;Names=@();EffectiveHigh=$null;HighKnown=0.0}}
         $usage[$groupKey].Seconds+=$item.Value.Seconds
         if($null -ne $item.Value.HighPowerSeconds){$usage[$groupKey].High+=$item.Value.HighPowerSeconds;$usage[$groupKey].Coverage+=$item.Value.HighPowerCoverageSeconds}
         if($null -ne $item.Value.GameSeconds){$usage[$groupKey].Game+=$item.Value.GameSeconds;$usage[$groupKey].GameCoverage+=$item.Value.GameCoverageSeconds}
         if($item.Value.UsageSource){$usage[$groupKey].FromLogs=$true}
+        if($null -ne $item.Value.ModeGameSeconds){$usage[$groupKey].ModeGame+=$item.Value.ModeGameSeconds}
+        if($item.Value.GameNames){$usage[$groupKey].Names+=@($item.Value.GameNames -split '、')}
+        $itemHigh=if($null -ne $item.Value.ModeGameSeconds){[Math]::Max([double]$item.Value.HighPowerSeconds,[double]$item.Value.ModeGameSeconds)}else{$item.Value.HighPowerSeconds}
+        if($null -ne $itemHigh){$usage[$groupKey].EffectiveHigh+=$itemHigh}
+        $usage[$groupKey].HighKnown+=[Math]::Max($item.Value.HighPowerCoverageSeconds,[double]$item.Value.ModeGameSeconds)
     }
     foreach($item in $State.Days.GetEnumerator()){
         $date=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
@@ -170,18 +175,21 @@ function Update-EnergyDailyRows {
         $cost=if($null -ne $entry){Format-EnergyCost $entry.KWh $State.Price}else{'—'}
         $coverage=if($null -eq $entry){'—'}elseif($entry.CloudDays -gt 0){if($entry.LocalDays -gt 0){'历史 + 估算'}else{'米家历史'}}else{'本机估算'}
         $u=$usage[$groupKey];$online=if($u -and $u.Seconds -gt 0){Format-EnergyDuration $u.Seconds}else{'未采集'}
-        $high=if($u -and $null -ne $u.High){(Format-EnergyDuration $u.High)+$(if($u.Coverage -lt $u.Seconds-0.5){' *'})}else{'未统计'}
-        $game=if($u -and $null -ne $u.Game){(Format-EnergyDuration $u.Game)+$(if($u.GameCoverage -lt $u.Seconds-0.5){' *'})}else{'未统计'}
+        $effectiveHigh=if($u){$u.EffectiveHigh}else{$null}
+        $high=if($u -and $null -ne $effectiveHigh){(Format-EnergyDuration $effectiveHigh)+$(if($null -ne $u.ModeGame){' 估'})+$(if($u.HighKnown -lt $u.Seconds-0.5){' *'})}else{'未统计'}
+        $game=if($u -and $null -ne $u.Game){(Format-EnergyDuration $u.Game)+$(if($null -ne $u.ModeGame){' 估'})+$(if($u.GameCoverage -lt $u.Seconds-0.5){' *'})}else{'未统计'}
         $index=$grid.Rows.Add([object[]]@($date,$amount,$cost,$coverage,$online,$high,$game))
         $usageSource=if($u -and $u.FromLogs){'运行日志 / 采样估算'}else{'本机监测'}
-        $grid.Rows[$index].Tag=if($u){"$date · $usageSource $(Format-EnergyDuration $u.Seconds) · 高功耗覆盖 $(Format-EnergyDuration $u.Coverage) · 游戏识别覆盖 $(Format-EnergyDuration $u.GameCoverage)；* 表示部分覆盖"}else{"$date · 没有本机监测时长；米家电量不能反推使用或游戏时长"}
+        $gameNames=if($u){(@($u.Names | Select-Object -Unique) -join '、')}else{''}
+        $grid.Rows[$index].Tag=if($u){"$date · $usageSource $(Format-EnergyDuration $u.Seconds) · 高功耗实测覆盖 $(Format-EnergyDuration $u.Coverage) · 游戏识别覆盖 $(Format-EnergyDuration $u.GameCoverage)"+$(if($gameNames){" · 游戏：$gameNames"})+$(if($null -ne $u.ModeGame){'；估＝游戏档会话推算，不等于实测 ≥150 W'})}else{"$date · 没有本机监测时长；米家电量不能反推使用或游戏时长"}
         $grid.Rows[$index].Cells[4].ToolTipText='复用运行日志与有效采样估算；有运行日志时，即使插座断线仍可记录使用时长。日志缺口不补，重叠来源不相加。'
-        $grid.Rows[$index].Cells[5].ToolTipText=if($u -and $null -ne $u.High){'输入功率 ≥150 W；有效统计覆盖 {0:N2} 小时，旧记录未统计部分未知。' -f ($u.Coverage/3600)}else{'旧记录没有高功耗分段统计；不当作零。'}
-        $grid.Rows[$index].Cells[6].ToolTipText='复用历史游戏识别日志与当前检测结果，包含已确认游戏的菜单及后台保留期；单纯切换到游戏档不会计入，日志缺口不当作零。'
+        $grid.Rows[$index].Cells[5].ToolTipText=if($u){"实测 ≥150 W：$(Format-EnergyDuration $u.High)；游戏档推算：$(Format-EnergyDuration $u.ModeGame)。同日取较大值再汇总，避免重叠相加；估算不是功率实测，不影响电量、电费。"}else{'没有实测或游戏档会话依据；不当作零。'}
+        $grid.Rows[$index].Cells[6].ToolTipText='复用游戏识别及有游戏原因的进入 / 退出 Game 档日志重建会话，扣除已记录的休眠、关机；标“估”的包含会话推算。'+$(if($gameNames){" 游戏：$gameNames"})
         $period=New-Object ProfileEnergyPeriod;$period.Label=if($view -eq 'Month'){$start.ToString('yy-MM')}else{Format-EnergyCalendarDate $start 'MM-dd'}
         if($entry -and $null -ne $State.Price){$period.Cost=$entry.KWh*[double]$State.Price}
         if($u -and $u.Seconds -gt 0){$period.UsageHours=$u.Seconds/3600}
-        if($u -and $null -ne $u.High){$period.HighHours=$u.High/3600;$period.HighCoverageHours=$u.Coverage/3600}
+        if($u -and $null -ne $effectiveHigh){$period.HighHours=$effectiveHigh/3600;$period.HighCoverageHours=$u.Coverage/3600}
+        if($u -and $null -ne $u.ModeGame){$period.ModeGameHours=$u.ModeGame/3600}
         if($u -and $null -ne $u.Game){$period.GameHours=$u.Game/3600;$period.GameCoverageHours=$u.GameCoverage/3600}
         $periods.Insert(0,$period)
         $weekend=$view -eq 'Day' -and $start.DayOfWeek -in @([DayOfWeek]::Saturday,[DayOfWeek]::Sunday)
@@ -248,7 +256,7 @@ function Show-EnergyDetails {
     $group=New-WorkstationCombo $daily 688 10 124 @(@('Day','按日'),@('Week','按周'),@('Month','按月')) 'Day'
     $range=New-WorkstationCombo $daily 824 10 158 @(@(7,'近 7 天'),@(30,'近 30 天'),@(90,'近 90 天')) 30
     $grid=New-Object Windows.Forms.DataGridView;$grid.SetBounds(12,48,976,234);$grid.ReadOnly=$true;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AllowUserToResizeRows=$false;$grid.RowHeadersVisible=$false;$grid.MultiSelect=$false;$grid.SelectionMode='FullRowSelect';$grid.AutoSizeColumnsMode='Fill';$grid.BackgroundColor=[Drawing.Color]::White;$grid.BorderStyle='None';$grid.GridColor=[Drawing.Color]::FromArgb(234,239,242);$grid.EnableHeadersVisualStyles=$false;$grid.ColumnHeadersDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(244,247,249);$grid.ColumnHeadersDefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(91,107,118);$grid.ColumnHeadersDefaultCellStyle.WrapMode='False';$grid.ColumnHeadersHeight=32;$grid.ColumnHeadersHeightSizeMode='DisableResizing';$grid.RowTemplate.Height=32;$grid.DefaultCellStyle.SelectionBackColor=[Drawing.Color]::FromArgb(228,240,247);$grid.DefaultCellStyle.SelectionForeColor=[Drawing.Color]::FromArgb(42,55,67);$grid.AlternatingRowsDefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(249,251,252);$grid.CellBorderStyle='SingleHorizontal'
-    foreach($column in @(@('date','日期',145),@('amount','用电量 (kWh)',128),@('cost','电费',100),@('coverage','电量来源',130),@('usage','使用时长',155),@('high','高功耗时长',155),@('game','游戏时长',155))){$index=$grid.Columns.Add($column[0],$column[1]);$grid.Columns[$index].FillWeight=$column[2];$grid.Columns[$index].SortMode='NotSortable';$grid.Columns[$index].DefaultCellStyle.Padding=New-Object Windows.Forms.Padding 8,0,8,0;if($index -gt 0){$grid.Columns[$index].DefaultCellStyle.Alignment='MiddleRight';$grid.Columns[$index].HeaderCell.Style.Alignment='MiddleRight'}}
+    foreach($column in @(@('date','日期',145),@('amount','用电量 (kWh)',128),@('cost','电费',100),@('coverage','电量来源',130),@('usage','使用时长',155),@('high','高功耗(含估)',155),@('game','游戏时长',155))){$index=$grid.Columns.Add($column[0],$column[1]);$grid.Columns[$index].FillWeight=$column[2];$grid.Columns[$index].SortMode='NotSortable';$grid.Columns[$index].DefaultCellStyle.Padding=New-Object Windows.Forms.Padding 8,0,8,0;if($index -gt 0){$grid.Columns[$index].DefaultCellStyle.Alignment='MiddleRight';$grid.Columns[$index].HeaderCell.Style.Alignment='MiddleRight'}}
     $grid.Columns[4].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(32,139,111);$grid.Columns[5].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(181,105,26)
     $grid.Columns[6].DefaultCellStyle.ForeColor=[Drawing.Color]::FromArgb(130,83,176)
     $grid.Columns[2].DefaultCellStyle.Font=New-Object Drawing.Font 'Segoe UI',10,([Drawing.FontStyle]::Bold)

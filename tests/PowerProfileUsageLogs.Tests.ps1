@@ -27,6 +27,29 @@ try{
     $record=@{timestamp=$at.ToString('o');event='auto.decision';data=@{source='NoGameSignal';after='Game'}}|ConvertTo-Json -Compress
     Assert 'exit debounce held in Game is classified from detector evidence' ([ProfileUsageLogReader]::ParseRecord($record).Game -eq $false)
     Assert 'malformed log line is skipped' ($null -eq [ProfileUsageLogReader]::ParseRecord('broken'))
+    $sessions=New-Object 'Collections.Generic.List[ProfileUsageLogPoint]'
+    $enter=[ProfileUsageLogReader]::ParseLegacy('2026-11-13 23:30:00  switched to Game (Boost=2) Reason: 单核瓶颈: topGPU=NBA2K26.exe pid=12')
+    $exit=[ProfileUsageLogReader]::ParseLegacy('2026-11-14 01:30:00  switched to Idle (Boost=0) Reason: 无已确认游戏')
+    $sessions.Add($enter);$sessions.Add($exit)
+    $power=New-Object 'Collections.Generic.List[ProfileUsagePowerEvent]'
+    $modeDays=[ProfileUsageLogReader]::BuildSessions($sessions,$power,$exit.Time)
+    Assert 'paired NBA mode changes rebuild a two-hour session across long log gaps' ($modeDays['2026-11-13'].GameSeconds -eq 1800 -and $modeDays['2026-11-14'].GameSeconds -eq 5400)
+    Assert 'game-mode high-power estimate is separately attributed' ($modeDays['2026-11-14'].ModeGameSeconds -eq 5400 -and $null -eq $modeDays['2026-11-14'].HighPowerSeconds -and $modeDays['2026-11-14'].GameNames -eq 'NBA 2K26')
+    $down=New-Object ProfileUsagePowerEvent;$down.Time=$enter.Time.AddMinutes(30);$down.Awake=$false;$power.Add($down)
+    $up=New-Object ProfileUsagePowerEvent;$up.Time=$enter.Time.AddMinutes(90);$up.Awake=$true;$power.Add($up)
+    $awakeDays=[ProfileUsageLogReader]::BuildSessions($sessions,$power,$exit.Time)
+    Assert 'sleep within a long game session is subtracted rather than counted' ($awakeDays['2026-11-13'].GameSeconds -eq 1800 -and $awakeDays['2026-11-14'].GameSeconds -eq 1800)
+    $report='<EventData><Data Name="SleepTime">2026-11-13T16:00:00Z</Data><Data Name="WakeTime">2026-11-13T17:00:00Z</Data></EventData>'
+    $exact=[ProfileUsageLogReader]::ParseSleepReport($report);$power.Clear();foreach($p in $exact){$power.Add($p)}
+    $earlyWake=New-Object ProfileUsagePowerEvent;$earlyWake.Time=$enter.Time.AddMinutes(31);$earlyWake.Awake=$true;$power.Add($earlyWake)
+    $precise=[ProfileUsageLogReader]::BuildSessions($sessions,$power,$exit.Time)
+    Assert 'explicit sleep/wake payload wins over misleading early resume timestamps' ($precise['2026-11-14'].ModeGameSeconds -eq 1800)
+    $sessions.Add($enter);$dedup=[ProfileUsageLogReader]::BuildSessions($sessions,$power,$exit.Time)
+    Assert 'duplicated mode records do not duplicate reconstructed sessions' ($dedup['2026-11-14'].ModeGameSeconds -eq 1800)
+    $sessions.Clear();$sessions.Add($enter)
+    Assert 'unclosed historical session is not extended indefinitely' ([ProfileUsageLogReader]::BuildSessions($sessions,$power,$enter.Time.AddDays(3)).Count -eq 0)
+    $library=[ProfileUsageLogReader]::ParseLegacy('2026-11-13 23:30:00  switched to Game (Boost=2) Reason: LibraryGame [start_protected_game.exe pid=12] library=NBA 2K26; CPU=25%')
+    Assert 'library identity is retained for protected NBA launchers' ($library.GameName -eq 'NBA 2K26')
     $usage=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'
     $sample=New-Object ProfileEnergyDay;$sample.Seconds=120;$sample.HighPowerSeconds=60;$sample.HighPowerCoverageSeconds=120;$usage['2026-11-14']=$sample
     $cache=New-Object ProfileUsageLogCache;$cache.Days=New-Object 'Collections.Generic.Dictionary[string,ProfileEnergyDay]'

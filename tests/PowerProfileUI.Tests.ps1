@@ -139,6 +139,14 @@ try {
     Assert-Equal 'combined timeline retains cost and two independent hour series' ($latestPeriod.Cost -eq 0.35 -and $latestPeriod.UsageHours -eq 1 -and [Math]::Abs($latestPeriod.HighHours-1.0/6) -lt 0.00001) $true
     Assert-Equal 'partial high-power coverage remains disclosed' $latestPeriod.HighCoverageHours 0.5
     Assert-Equal 'game duration is included in the combined timeline' ([Math]::Abs($latestPeriod.GameHours-1.0/3) -lt 0.00001) $true
+    $displayState.UsageDays[$localDay].ModeGameSeconds=1800;$displayState.UsageDays[$localDay].GameSeconds=1800;$displayState.UsageDays[$localDay].GameNames='NBA 2K26';$displayState.UsageUpdatedAt=[DateTime]::UtcNow
+    Update-EnergyDetails $displayState
+    Assert-Equal 'mode-derived high-power duration is visibly labeled as estimated' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[5].Value '30 分钟 估 *'
+    Assert-Equal 'estimated high-power details retain measured power separately' ($Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[5].ToolTipText -like '*实测*10 分钟*游戏档推算*30 分钟*') $true
+    Assert-Equal 'game provenance includes the named NBA evidence' ($Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[6].ToolTipText -like '*NBA 2K26*') $true
+    Assert-Equal 'mode estimates never modify energy or measured high-power counters' ($displayState.TodayKWh -eq 0.5 -and $displayState.UsageDays[$localDay].HighPowerSeconds -eq 600) $true
+    $displayState.UsageDays[$localDay].ModeGameSeconds=$null;$displayState.UsageDays[$localDay].GameSeconds=1200;$displayState.UsageDays[$localDay].GameNames=$null;$displayState.UsageUpdatedAt=[DateTime]::UtcNow
+    Update-EnergyDetails $displayState
     $Script:EnergyDetails.Tag.Group.SelectedIndex=1;Update-EnergyDetails $displayState
     Assert-Equal 'weekly ledger includes game duration' $Script:EnergyDetails.Tag.DailyGrid.Rows[0].Cells[6].Value '20 分钟 *'
     $Script:EnergyDetails.Tag.Group.SelectedIndex=2;Update-EnergyDetails $displayState

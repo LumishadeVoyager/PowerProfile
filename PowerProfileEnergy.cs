@@ -88,7 +88,7 @@ public sealed class ProfilePlugTransport {
 }
 
 public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} public bool? IsGame {get;set;} }
-public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} public double? GameSeconds {get;set;} public double GameCoverageSeconds {get;set;} public string UsageSource {get;set;} }
+public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} public double? GameSeconds {get;set;} public double GameCoverageSeconds {get;set;} public string UsageSource {get;set;} public double? ModeGameSeconds {get;set;} public string GameNames {get;set;} }
 public sealed class ProfileCloudHistory {public uint DeviceId {get;set;} public string Model {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} public string Query {get;set;} public double Multiplier {get;set;} public string FetchedAt {get;set;} }
 public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
@@ -191,7 +191,7 @@ public sealed class ProfileEnergyService : IDisposable {
         var r=new ProfileEnergySnapshot{Price=price,LocalDay=today.ToString("yyyy-MM-dd"),WeekStart=week.ToString("yyyy-MM-dd"),MonthStart=month.ToString("yyyy-MM-dd")};
         foreach(var item in h.Days){DateTime date;var value=item.Value;
             if(!DateTime.TryParseExact(item.Key,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out date) || date>today || value==null || Double.IsNaN(value.KWh) || Double.IsInfinity(value.KWh) || value.KWh<0 || Double.IsNaN(value.Seconds) || Double.IsInfinity(value.Seconds) || value.Seconds<0)continue;
-            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source,HighPowerSeconds=value.HighPowerSeconds,HighPowerCoverageSeconds=value.HighPowerCoverageSeconds,GameSeconds=value.GameSeconds,GameCoverageSeconds=value.GameCoverageSeconds};
+            r.Days[item.Key]=new ProfileEnergyDay{KWh=value.KWh,Seconds=value.Seconds,Source=value.Source,HighPowerSeconds=value.HighPowerSeconds,HighPowerCoverageSeconds=value.HighPowerCoverageSeconds,GameSeconds=value.GameSeconds,GameCoverageSeconds=value.GameCoverageSeconds,ModeGameSeconds=value.ModeGameSeconds,GameNames=value.GameNames};
             if(value.Source!="MiHome")r.UsageDays[item.Key]=r.Days[item.Key];
             if(date==today){r.TodayKWh=value.KWh;r.TodaySeconds=value.Seconds;}
             if(date>=week){r.WeekKWh=(r.WeekKWh??0)+value.KWh;r.WeekSeconds+=value.Seconds;}
