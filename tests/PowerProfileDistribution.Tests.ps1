@@ -27,7 +27,7 @@ try {
     $source=Join-Path $tmp 'source';[void][IO.Directory]::CreateDirectory($source)
     Get-ChildItem $project -File | Where-Object {Test-ProfilePackagePath $_.Name} | Copy-Item -Destination $source
     Copy-Item (Join-Path $project 'legacy') (Join-Path $source 'legacy') -Recurse
-    $privateFiles=@('settings.json','energy.settings.json','devices.hub.json','cstate.settings.json','usage.logs.history.json')
+    $privateFiles=@('settings.json','energy.settings.json','devices.hub.json','cstate.settings.json','usage.logs.history.json','games.sessions.history.json')
     foreach($private in $privateFiles){'private fixture'|Set-Content (Join-Path $source $private)}
     @{version='2.0.0';distribution='source'}|ConvertTo-Json|Set-Content (Join-Path $source 'version.json')
     $out=Join-Path $tmp 'out';& (Join-Path $project 'Build-Release.ps1') -Source $source -Output $out
@@ -35,6 +35,7 @@ try {
     Expand-ProfilePackage $zip $package;$manifest=Test-ProfilePackage $package '2.0.0'
     Assert 'release ZIP has program files and manual' (@($manifest.files).Count -gt 30)
     Assert 'versioned release notes are bundled' (Test-Path (Join-Path $package 'RELEASE_NOTES_1.0.0.md'))
+    Assert 'analytics dependencies are bundled' ((Test-Path (Join-Path $package 'PowerProfileGameAnalytics.cs')) -and (Test-Path (Join-Path $package 'PowerProfileInsights.ps1')) -and (Test-Path (Join-Path $package 'PowerProfileInsightsUI.cs')))
     foreach($private in $privateFiles){Assert "package excludes $private" (-not(Test-Path (Join-Path $package $private)))}
     Assert 'release enables default OTA' ((Get-ProfileUpdateOptions $package).enabled)
     Assert 'source checkout defaults OTA off' (-not (Get-ProfileUpdateOptions $project).enabled)

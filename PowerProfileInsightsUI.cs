@@ -1,0 +1,53 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Text;
+using System.Windows.Forms;
+
+public sealed class ProfileHeatDay {public DateTime Date;public double? Value;public string Detail;public bool Excluded;}
+public sealed class ProfileCalendarHeatmap : Control {
+    public List<ProfileHeatDay> Days=new List<ProfileHeatDay>();public int Metric;int focused;readonly ToolTip tip=new ToolTip();readonly List<Tuple<Rectangle,ProfileHeatDay>> hit=new List<Tuple<Rectangle,ProfileHeatDay>>();
+    public event EventHandler<ProfileWorkspaceCommand> Selected;
+    public ProfileCalendarHeatmap(){DoubleBuffered=true;Height=240;AccessibleName="按星期排列的用电日历热力图";TabStop=true;}
+    int Capacity {get{return Math.Max(4,(Width-58)/20);}}
+    int Weeks {get{if(Days.Count==0)return 1;var first=Days.Min(d=>d.Date).Date;first=first.AddDays(-(((int)first.DayOfWeek+6)%7));return Math.Max(1,(Days.Max(d=>d.Date).Date-first).Days/7+1);}}
+    public void Fit(){int cell=Math.Min(28,Math.Max(14,(Width-58)/Math.Min(Capacity,Weeks)));int height=((Weeks+Capacity-1)/Capacity)*(7*cell+48)+34;if(Height!=height)Height=height;Invalidate();}
+    protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);Fit();}
+    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.Clear(ProfileTheme.Surface);hit.Clear();if(Days.Count==0){TextRenderer.DrawText(g,"所选范围暂无日期",Font,new Point(10,15),ProfileTheme.Muted);return;}var first=Days.Min(d=>d.Date).Date;first=first.AddDays(-(((int)first.DayOfWeek+6)%7));int capacity=Capacity,cell=Math.Min(28,Math.Max(14,(Width-58)/Math.Min(capacity,Weeks))),block=7*cell+48;double maximum=Days.Where(d=>!d.Excluded&&d.Value.HasValue).Select(d=>d.Value.Value).DefaultIfEmpty(1).Max();maximum=Math.Max(maximum,0.00001);
+        Color accent=Metric==0?Color.FromArgb(32,139,111):Metric==3?Color.FromArgb(204,125,32):Metric==4?Color.FromArgb(130,83,176):ProfileTheme.Accent;
+        for(int b=0;b<(Weeks+capacity-1)/capacity;b++)for(int r=0;r<7;r++)TextRenderer.DrawText(g,new[]{"周一","周二","周三","周四","周五","周六","周日"}[r],Font,new Point(2,b*block+29+r*cell),r>=5?ProfileTheme.Accent:ProfileTheme.Muted);
+        foreach(var d in Days){int offset=(d.Date.Date-first).Days,col=offset/7,row=offset%7,b=col/capacity;var rect=new Rectangle(49+(col%capacity)*cell,b*block+27+row*cell,cell-3,cell-3);
+            if(d.Excluded){using(var pen=new Pen(ProfileTheme.Border)){pen.DashStyle=DashStyle.Dot;g.DrawRectangle(pen,rect);}}
+            else if(!d.Value.HasValue){using(var brush=new HatchBrush(HatchStyle.LightDownwardDiagonal,ProfileTheme.Border,ProfileTheme.Surface))g.FillRectangle(brush,rect);}
+            else {double strength=d.Value.Value<=0?0.03:0.18+0.82*d.Value.Value/maximum;Color baseColor=ProfileTheme.Surface;var fill=Color.FromArgb((int)(baseColor.R+(accent.R-baseColor.R)*strength),(int)(baseColor.G+(accent.G-baseColor.G)*strength),(int)(baseColor.B+(accent.B-baseColor.B)*strength));using(var brush=new SolidBrush(fill))g.FillRectangle(brush,rect);using(var pen=new Pen(ProfileTheme.Border))g.DrawRectangle(pen,rect);}
+            if(d.Date.Day<=7&&d.Date.DayOfWeek==DayOfWeek.Monday || col%capacity==0&&row==0)TextRenderer.DrawText(g,d.Date.ToString("yyyy-MM"),Font,new Point(rect.X,rect.Y-24),ProfileTheme.Muted);
+            if(Focused&&Days.Count>0&&d==Days.OrderBy(x=>x.Date).ElementAt(Math.Min(focused,Days.Count-1)))using(var pen=new Pen(ProfileTheme.Text,2))g.DrawRectangle(pen,rect);
+            hit.Add(Tuple.Create(rect,d));
+        }
+        TextRenderer.DrawText(g,"浅 → 深：记录值由少到多；斜线：缺失；虚线：被筛选。点击日期查看明细。",Font,new Rectangle(4,Height-28,Math.Max(1,Width-8),28),ProfileTheme.Muted,TextFormatFlags.EndEllipsis);
+    }
+    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));tip.SetToolTip(this,item==null?"":item.Item2.Date.ToString("yyyy-MM-dd")+" "+new[]{"周日","周一","周二","周三","周四","周五","周六"}[(int)item.Item2.Date.DayOfWeek]+"\n"+item.Item2.Detail);}
+    protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));if(item!=null){Focus();focused=Days.OrderBy(x=>x.Date).ToList().IndexOf(item.Item2);if(Selected!=null)Selected(this,new ProfileWorkspaceCommand("HeatDate",item.Item2.Date.ToString("yyyy-MM-dd")));}}
+    protected override bool IsInputKey(Keys key){return key==Keys.Left||key==Keys.Right||key==Keys.Up||key==Keys.Down||key==Keys.Home||key==Keys.End||base.IsInputKey(key);}
+    protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);if(Days.Count==0)return;int delta=e.KeyCode==Keys.Left?-7:e.KeyCode==Keys.Right?7:e.KeyCode==Keys.Up?-1:e.KeyCode==Keys.Down?1:0;focused=Math.Max(0,Math.Min(Days.Count-1,focused+delta));if(e.KeyCode==Keys.Home)focused=0;if(e.KeyCode==Keys.End)focused=Days.Count-1;var day=Days.OrderBy(x=>x.Date).ElementAt(focused);AccessibleDescription=day.Date.ToString("yyyy-MM-dd")+" "+day.Detail;if(e.KeyCode==Keys.Enter&&Selected!=null)Selected(this,new ProfileWorkspaceCommand("HeatDate",day.Date.ToString("yyyy-MM-dd")));if(delta!=0||e.KeyCode==Keys.Enter||e.KeyCode==Keys.Home||e.KeyCode==Keys.End)e.Handled=true;Invalidate();}
+    protected override void OnGotFocus(EventArgs e){base.OnGotFocus(e);Invalidate();}
+    protected override void OnLostFocus(EventArgs e){base.OnLostFocus(e);Invalidate();}
+    protected override void Dispose(bool disposing){if(disposing)tip.Dispose();base.Dispose(disposing);}
+}
+public sealed class ProfileInsightsPanel : Panel {
+    public readonly ComboBox Metric=ProfileWorkspaceForm.Combo(new[]{"电脑使用时长","电费","用电量","高功耗（含估）","游戏时长"});public readonly Label Title=new Label(),Comparison=new Label();public readonly ProfileCalendarHeatmap Heatmap=new ProfileCalendarHeatmap();bool laying;
+    public ProfileInsightsPanel(){Height=450;Title.Text="日历热力图与记录日均对比";Title.Font=new Font("Microsoft YaHei UI",13,FontStyle.Bold);Metric.SelectedIndex=0;Controls.Add(Title);Controls.Add(Metric);Controls.Add(Comparison);Controls.Add(Heatmap);Comparison.Tag="muted";Heatmap.SizeChanged+=(s,e)=>PerformLayout();}
+    protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);if(laying)return;laying=true;try{int h=Math.Max(18,Font.Height);Title.SetBounds(0,6,Width,h*2);Metric.SetBounds(0,h*2+10,230,h+12);int measured=TextRenderer.MeasureText(Comparison.Text,Comparison.Font,new Size(Math.Max(50,Width-8),Int32.MaxValue),TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl).Height;Comparison.SetBounds(0,Metric.Bottom+12,Width,Math.Max(h*4,measured+12));Heatmap.SetBounds(0,Comparison.Bottom+8,Width,Heatmap.Height);Heatmap.Fit();int height=Heatmap.Bottom+8;if(Height!=height)Height=height;}finally{laying=false;}}
+}
+public static class ProfileAnalyticsExport {
+    static string SafeCell(string text){text=text??"";string trimmed=text.TrimStart();if(trimmed.Length>0&&("=+-@".IndexOf(trimmed[0])>=0||text[0]=='\t'||text[0]=='\r'))text="'"+text;return "\""+text.Replace("\"","\"\"")+"\"";}
+    public static string Csv(string[] headers,List<string[]> rows){var result=new StringBuilder();result.AppendLine(String.Join(",",headers.Select(SafeCell)));foreach(var row in rows)result.AppendLine(String.Join(",",row.Select(SafeCell)));return result.ToString();}
+    public static void WriteText(string path,string contents){string temporary=path+"."+Guid.NewGuid().ToString("N")+".tmp";try{File.WriteAllText(temporary,contents,new UTF8Encoding(true));if(File.Exists(path))File.Replace(temporary,path,null);else File.Move(temporary,path);}finally{if(File.Exists(temporary))File.Delete(temporary);}}
+    public static string Report(string title,string scope,string summary,string[] headers,List<string[]> rows){var result=new StringBuilder("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>");result.Append(WebUtility.HtmlEncode(title));result.Append("</title><style>body{font:15px/1.7 'Segoe UI','Microsoft YaHei',sans-serif;max-width:1200px;margin:40px auto;padding:0 24px;color:#243348}h1{font-size:28px}p{color:#53657c}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;border-bottom:1px solid #dae2ed;padding:10px;vertical-align:top;white-space:pre-wrap}th{background:#f1f5fa}@media print{body{margin:0}thead{display:table-header-group}tr{break-inside:avoid}}</style><h1>");result.Append(WebUtility.HtmlEncode(title));result.Append("</h1><p>").Append(WebUtility.HtmlEncode(scope)).Append("</p><p>").Append(WebUtility.HtmlEncode(summary)).Append("</p><table><thead><tr>");foreach(var h in headers)result.Append("<th>").Append(WebUtility.HtmlEncode(h)).Append("</th>");result.Append("</tr></thead><tbody>");foreach(var row in rows){result.Append("<tr>");foreach(var value in row)result.Append("<td>").Append(WebUtility.HtmlEncode(value??"")).Append("</td>");result.Append("</tr>");}return result.Append("</tbody></table><p>北京时间；费用为当前固定电价估算，不是供电结算账单。缺失不代表零，推算不等于实测。报告为本地静态文件，不加载外部资源。</p></html>").ToString();}
+    public static void SaveChart(Control chart,string path,string title,string caption){using(var bitmap=new Bitmap(chart.Width+48,chart.Height+150)){using(var g=Graphics.FromImage(bitmap)){g.Clear(Color.White);using(var font=new Font("Microsoft YaHei UI",17,FontStyle.Bold))g.DrawString(title,font,Brushes.Black,new RectangleF(24,12,bitmap.Width-48,42));using(var font=new Font("Microsoft YaHei UI",10))g.DrawString("电费：蓝 · 使用：绿 · 高功耗含估：橙 / 虚线 · 游戏：紫 / 点线",font,Brushes.DimGray,24,60);}using(var plot=new Bitmap(chart.Width,chart.Height)){chart.DrawToBitmap(plot,new Rectangle(0,0,plot.Width,plot.Height));using(var g=Graphics.FromImage(bitmap)){g.DrawImageUnscaled(plot,24,88);using(var font=new Font("Microsoft YaHei UI",9))g.DrawString(caption,font,Brushes.DimGray,new RectangleF(24,chart.Height+95,bitmap.Width-48,48));}}string temporary=path+"."+Guid.NewGuid().ToString("N")+".tmp";try{bitmap.Save(temporary,System.Drawing.Imaging.ImageFormat.Png);if(File.Exists(path))File.Replace(temporary,path,null);else File.Move(temporary,path);}finally{if(File.Exists(temporary))File.Delete(temporary);}}}
+}

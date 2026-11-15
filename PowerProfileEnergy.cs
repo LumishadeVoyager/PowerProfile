@@ -99,6 +99,7 @@ public sealed class ProfileEnergySnapshot {
     public Dictionary<string,ProfileEnergyDay> Days=new Dictionary<string,ProfileEnergyDay>();
     public Dictionary<string,ProfileEnergyDay> UsageDays=new Dictionary<string,ProfileEnergyDay>();
     public DateTime UsageUpdatedAt;
+    public List<ProfileGameSession> GameSessions=new List<ProfileGameSession>();
     public List<ProfileEnergyPoint> Points=new List<ProfileEnergyPoint>();
 }
 public sealed class ProfileConnectionProbe {
@@ -110,6 +111,7 @@ public sealed class ProfileEnergyService : IDisposable {
     ProfileEnergyConfig config;ProfileEnergyHistory history;ProfileCloudHistory cloud;ProfileEnergySnapshot snapshot=new ProfileEnergySnapshot();
     readonly Queue<string[]> events=new Queue<string[]>();
     readonly ProfileUsageLogReader usageLogs;ProfileUsageLogCache usageCache;System.Threading.Timer usageTimer;bool usageBusy,usageError;
+    List<ProfileGameSession> gameSessions=new List<ProfileGameSession>();
     static readonly byte[] entropy=Encoding.UTF8.GetBytes("PowerProfile.cuco.plug.v3.v1");
     public ProfileEnergyService(string root):this(root,true){}
     public ProfileEnergyService(string root,bool autoPoll){this.root=root;this.autoPoll=autoPoll;var json=Serializer();
@@ -129,7 +131,7 @@ public sealed class ProfileEnergyService : IDisposable {
         usageTimer=new System.Threading.Timer(_=>RefreshUsageLogs(),null,autoPoll?0:Timeout.Infinite,autoPoll?60000:Timeout.Infinite);
     }
     public void RefreshUsageLogs(){lock(gate){if(disposed || usageBusy)return;usageBusy=true;}
-        try{var loaded=usageLogs.Refresh(DateTime.UtcNow);lock(gate){usageCache=loaded;usageError=false;}}
+        try{var loaded=usageLogs.Refresh(DateTime.UtcNow);List<ProfileEnergyPoint> samples;lock(gate)samples=new List<ProfileEnergyPoint>(history.Points);var sessions=usageLogs.UpdateGameSamples(samples);lock(gate){usageCache=loaded;gameSessions=sessions;usageError=false;}}
         catch{lock(gate){if(!usageError)Event("energy.usage.logs.failed","运行日志暂不可读取；保留已有时长统计","WARN");usageError=true;}}
         finally{lock(gate)usageBusy=false;}
     }
@@ -178,7 +180,7 @@ public sealed class ProfileEnergyService : IDisposable {
         // Cloud energy replaces local kWh, but never replaces locally observed awake time.
         r.UsageDays=Summarize(history,config.Price,DateTime.UtcNow).UsageDays;
         if(usageCache!=null){ProfileUsageLogReader.Merge(r.UsageDays,usageCache);r.UsageUpdatedAt=usageCache.UpdatedAt;}
-        r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);
+        r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);r.GameSessions=new List<ProfileGameSession>(gameSessions);
         return r;}}
     static void ValidateCloud(ProfileCloudHistory value){
         if(value==null || value.DeviceId==0 || value.Model!="cuco.plug.v3" || value.Days==null || value.Days.Count==0 || value.Days.Count>400)throw new InvalidDataException("历史设备或日期数量无效。");

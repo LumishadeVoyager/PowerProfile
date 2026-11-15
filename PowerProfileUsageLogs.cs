@@ -17,13 +17,15 @@ public sealed class ProfileUsageLogCache {
 public sealed class ProfileUsageLogReader {
     readonly string root;readonly bool readSleepEvents;string fingerprint="";
     ProfileUsageLogCache cache;
+    readonly ProfileGameSessionStore gameSessions;
     static readonly TimeZoneInfo ChinaZone=TimeZoneInfo.FindSystemTimeZoneById("China Standard Time");
     public ProfileUsageLogReader(string root):this(root,true){}
-    public ProfileUsageLogReader(string root,bool readSleepEvents){this.root=root;this.readSleepEvents=readSleepEvents;
+    public ProfileUsageLogReader(string root,bool readSleepEvents){this.root=root;this.readSleepEvents=readSleepEvents;gameSessions=new ProfileGameSessionStore(root);
         try{cache=new JavaScriptSerializer{MaxJsonLength=4*1024*1024}.Deserialize<ProfileUsageLogCache>(ProfileEnergyStore.Read(Path.Combine(root,"usage.logs.history.json")));Validate(cache);}
         catch{cache=new ProfileUsageLogCache{Days=new Dictionary<string,ProfileEnergyDay>()};}
     }
     public ProfileUsageLogCache Cache {get{return cache;}}
+    public List<ProfileGameSession> UpdateGameSamples(List<ProfileEnergyPoint> samples){gameSessions.UpdateSamples(samples);return new List<ProfileGameSession>(gameSessions.Sessions);}
     static void Validate(ProfileUsageLogCache value){
         if(value==null || value.Days==null || value.Days.Count>401)throw new InvalidDataException();
         foreach(var entry in value.Days){DateTime date;var d=entry.Value;
@@ -171,6 +173,7 @@ public sealed class ProfileUsageLogReader {
         var points=new List<ProfileUsageLogPoint>();
         foreach(var file in files)foreach(var line in Lines(file)){if(line.Length>512*1024)continue;var p=file==legacy?ParseLegacy(line):ParseRecord(line);if(p!=null)points.Add(p);}
         bool sleepAvailable=false;var power=readSleepEvents?SleepEvents(out sleepAvailable):new List<ProfileUsagePowerEvent>();var days=BuildSessions(points,power,utcNow);
+        gameSessions.Refresh(points,power,utcNow);
         var merged=new Dictionary<string,ProfileEnergyDay>(cache.Days);string oldest=TimeZoneInfo.ConvertTimeFromUtc(utcNow,ChinaZone).AddDays(-400).ToString("yyyy-MM-dd");
         foreach(var pair in days)merged[pair.Key]=pair.Value;
         var remove=new List<string>();foreach(var key in merged.Keys)if(String.CompareOrdinal(key,oldest)<0)remove.Add(key);foreach(var key in remove)merged.Remove(key);

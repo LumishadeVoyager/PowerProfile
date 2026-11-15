@@ -1,5 +1,6 @@
 ﻿. (Join-Path $PSScriptRoot 'PowerProfileWorkspaceData.ps1')
-if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs') -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
+if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
+. (Join-Path $PSScriptRoot 'PowerProfileInsights.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileConnectionUI.ps1')
 $Script:Workspace=$null
 function Show-WorkspaceDialog($Form){
@@ -36,6 +37,7 @@ function Select-WorkspaceDevice {
 function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
     $w=$Script:Workspace;$t=$w.Tag
     try{
+        if(Invoke-InsightsCommand $Action $Id){return}
         switch($Action){
             'Navigate'{$w.Navigate($Id);return}
             'Page'{$t.DeviceKey='';$t.ScheduleKey='';Update-ProfileWorkspace;return}
@@ -113,8 +115,8 @@ function Update-ProfileWorkspace {
     $w.Runtime.Text="托盘：$(if($trayAlive){'运行中'}else{'未确认运行'}) · 自动化中枢：$(if(-not $hub.Config.enabled){'已暂停'}elseif($hub.Fresh){'运行中'}else{'响应过期 / 未连接'})`r`n插座：$(Get-EnergyStatusText $State) · $(if($State.ObservedAt -ne [DateTime]::MinValue){'最近读回 '+$State.ObservedAt.ToLocalTime().ToString('HH:mm:ss')}else{'尚无实际读回'})`r`n关闭工作台仅隐藏窗口；托盘与已启用的中枢仍继续工作。"
     $view=@('Day','Week','Month')[$w.Group.SelectedIndex];$count=if($view -eq 'Day'){@(7,30,90)[$w.Range.SelectedIndex]}elseif($view -eq 'Week'){@(4,8,12)[$w.Range.SelectedIndex]}else{@(3,6,12)[$w.Range.SelectedIndex]}
     $energyKey="$($State.ObservedAt.Ticks)|$($State.UsageUpdatedAt.Ticks)|$($State.Price)|$view|$count|$($State.Days.Count)|$($State.MonthKWh)"
-    if($t.EnergyKey -ne $energyKey){$t.EnergyData=Get-WorkspaceEnergyData $State $view $count;$t.EnergyKey=$energyKey;$w.SetLedger($t.EnergyData.Rows.ToArray());$t.Chart.Periods=$t.EnergyData.Periods;$t.Chart.Invalidate();$w.Quality.Text=$t.EnergyData.Summary;$w.GameInfo.Text='游戏日期、名称与时长来自现有识别和日志；点击用电页日期可查看采样覆盖及会话推算依据。'}
-    if($w.ActivePage -eq 'Games'){$gameKey="$($State.UsageUpdatedAt.Ticks)|$($State.LocalDay)|$($State.UsageDays.Count)";if($t.GameKey -ne $gameKey){$games=Get-WorkspaceEnergyData $State 'Day' 90;$w.SetGames($games.Rows.ToArray());$t.GameKey=$gameKey}}
+    if($t.EnergyKey -ne $energyKey){$t.EnergyKey=$energyKey;Update-WorkspaceInsights $State $view $count}
+    if($w.ActivePage -eq 'Games'){$gameKey="$($State.UsageUpdatedAt.Ticks)|$($State.LocalDay)|$($State.UsageDays.Count)";if($t.GameKey -ne $gameKey){$t.GameKey=$gameKey;Update-WorkspaceGames $State}}
     if($w.ActivePage -eq 'Devices'){
         $prefs=Get-WorkspacePreferences;$groups=@('全部分组')+@($hub.Status.devices|ForEach-Object {$p=$prefs.devices.($_.did);if($p.room){$p.room}else{'未分组'}}|Sort-Object -Unique)
         if(($groups -join '|') -ne (@($w.Room.Items) -join '|')){$selected=$w.Room.SelectedItem;$t.Suppress=$true;$w.Room.Items.Clear();foreach($g in $groups){[void]$w.Room.Items.Add($g)};$w.Room.SelectedItem=if($groups -contains $selected){$selected}else{'全部分组'};$t.Suppress=$false}

@@ -32,3 +32,4 @@ onboarding.json
 .updates/
 dist/
 workspace.settings.json
+games.sessions.history.json

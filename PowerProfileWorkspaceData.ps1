@@ -10,11 +10,14 @@ function Get-WorkspacePreferences([string]$Root=(Get-WorkspaceRoot)){
     return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices}
 }
 function Save-WorkspacePreferences($Preferences,[string]$Root=(Get-WorkspaceRoot)){Write-AtomicJson (Join-Path $Root 'workspace.settings.json') $Preferences -Pretty}
-function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30){
+function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30,$From=$null,$To=$null,[int]$DayType=0){
     $today=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+    $anchor=if($null -ne $To){([DateTime]$To).Date}else{$today}
+    if($null -ne $From){$From=([DateTime]$From).Date;if($From -gt $anchor){throw '开始日期不能晚于结束日期。'};if(($anchor-$From).Days -ge 400){throw '最多查看 400 天。'};$Count=switch($Group){'Week'{[int][Math]::Floor((($anchor.AddDays(-(([int]$anchor.DayOfWeek+6)%7)))-$From.AddDays(-(([int]$From.DayOfWeek+6)%7))).TotalDays/7)+1};'Month'{($anchor.Year-$From.Year)*12+$anchor.Month-$From.Month+1};default{($anchor-$From).Days+1}}}
     $totals=@{};$usage=@{}
     foreach($item in $State.Days.GetEnumerator()){
         $day=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+        if(($null -ne $From -and $day -lt $From) -or $day -gt $anchor -or -not (Test-InsightsDay $day $DayType)){continue}
         $start=switch($Group){'Week'{$day.AddDays(-(([int]$day.DayOfWeek+6)%7))};'Month'{$day.AddDays(1-$day.Day)};default{$day}}
         $key=$start.ToString('yyyy-MM-dd');if(-not $totals.ContainsKey($key)){$totals[$key]=@{KWh=0.0;Seconds=0.0;Cloud=0;Local=0}}
         $totals[$key].KWh+=$item.Value.KWh;$totals[$key].Seconds+=$item.Value.Seconds
@@ -22,6 +25,7 @@ function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30){
     }
     foreach($item in $State.UsageDays.GetEnumerator()){
         $day=[DateTime]::ParseExact($item.Key,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+        if(($null -ne $From -and $day -lt $From) -or $day -gt $anchor -or -not (Test-InsightsDay $day $DayType)){continue}
         $start=switch($Group){'Week'{$day.AddDays(-(([int]$day.DayOfWeek+6)%7))};'Month'{$day.AddDays(1-$day.Day)};default{$day}}
         $key=$start.ToString('yyyy-MM-dd');if(-not $usage.ContainsKey($key)){$usage[$key]=@{Seconds=0.0;High=$null;Coverage=0.0;Known=0.0;Game=$null;GameCoverage=0.0;Mode=$null;Effective=$null;Names=@();Logs=$false}}
         $u=$usage[$key];$d=$item.Value;$u.Seconds+=$d.Seconds
@@ -33,12 +37,15 @@ function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30){
     }
     $rows=New-Object 'Collections.Generic.List[ProfileLedgerView]';$periods=New-Object 'Collections.Generic.List[ProfileEnergyPeriod]';$details=@{};$known=0;$missing=0;$estimated=0
     for($i=0;$i -lt $Count;$i++){
-        $start=switch($Group){'Week'{$today.AddDays(-(([int]$today.DayOfWeek+6)%7)-7*$i)};'Month'{$today.AddDays(1-$today.Day).AddMonths(-$i)};default{$today.AddDays(-$i)}}
+        $start=switch($Group){'Week'{$anchor.AddDays(-(([int]$anchor.DayOfWeek+6)%7)-7*$i)};'Month'{$anchor.AddDays(1-$anchor.Day).AddMonths(-$i)};default{$anchor.AddDays(-$i)}}
         $key=$start.ToString('yyyy-MM-dd');$d=$totals[$key];$u=$usage[$key];$row=New-Object ProfileLedgerView;$row.Key=$key
-        $row.Date=if($Group -eq 'Month'){$start.ToString('yyyy-MM')+' · 自然月'}else{Format-EnergyCalendarDate $start}
+        $row.PeriodStart=$start;$row.PeriodEnd=switch($Group){'Week'{$start.AddDays(6)};'Month'{$start.AddMonths(1).AddDays(-1)};default{$start}}
+        $row.Date=if($Group -eq 'Day'){Format-EnergyCalendarDate $start}else{(Format-EnergyCalendarDate $start)+' — '+(Format-EnergyCalendarDate $row.PeriodEnd)}
+        if($d){$row.KWhNumber=$d.KWh;if($null -ne $State.Price){$row.CostNumber=$d.KWh*[double]$State.Price}}
+        if($u){$row.UsageSeconds=$u.Seconds;$row.HighSeconds=$u.Effective;$row.GameSeconds=$u.Game}
         $row.Energy=if($d){'{0:N3}' -f $d.KWh}else{'未采集'};$row.Cost=if($d){Format-EnergyCost $d.KWh $State.Price}else{'—'}
         $row.Source=if(-not $d){'无电量记录'}elseif($d.Cloud -gt 0 -and $d.Local -gt 0){'米家历史 + 本机积分'}elseif($d.Cloud -gt 0){'米家历史'}else{'本机功率积分'}
-        $row.Usage=if($u -and $u.Seconds -gt 0){Format-EnergyDuration $u.Seconds}else{'未采集'}
+        $row.Usage=if($u){Format-EnergyDuration $u.Seconds}else{'未采集'}
         $row.High=if($u -and $null -ne $u.Effective){(Format-EnergyDuration $u.Effective)+$(if($null -ne $u.Mode){' 估'})+$(if($u.Known -lt $u.Seconds-0.5){' *'})}else{'未统计'}
         $row.Game=if($u -and $null -ne $u.Game){(Format-EnergyDuration $u.Game)+$(if($null -ne $u.Mode){' 估'})+$(if($u.GameCoverage -lt $u.Seconds-0.5){' *'})}else{'未统计'}
         $row.Names=if($u){(@($u.Names|Select-Object -Unique) -join '、')}else{''};$row.Estimated=$u -and $null -ne $u.Mode;$row.Missing=-not $d
@@ -47,7 +54,7 @@ function Get-WorkspaceEnergyData($State,[string]$Group='Day',[int]$Count=30){
         $details[$key]=$row.Explanation;$rows.Add($row);if($d){$known++}else{$missing++};if($row.Estimated){$estimated++}
         $period=New-Object ProfileEnergyPeriod;$period.Key=$key;$period.Label=if($Group -eq 'Month'){$start.ToString('yy-MM')}else{Format-EnergyCalendarDate $start 'MM-dd'}
         if($d -and $null -ne $State.Price){$period.Cost=$d.KWh*[double]$State.Price}
-        if($u){if($u.Seconds -gt 0){$period.UsageHours=$u.Seconds/3600};if($null -ne $u.Effective){$period.HighHours=$u.Effective/3600};$period.HighCoverageHours=$u.Coverage/3600;if($null -ne $u.Game){$period.GameHours=$u.Game/3600};$period.GameCoverageHours=$u.GameCoverage/3600;if($null -ne $u.Mode){$period.ModeGameHours=$u.Mode/3600}}
+        if($u){$period.UsageHours=$u.Seconds/3600;if($null -ne $u.Effective){$period.HighHours=$u.Effective/3600};$period.HighCoverageHours=$u.Coverage/3600;if($null -ne $u.Game){$period.GameHours=$u.Game/3600};$period.GameCoverageHours=$u.GameCoverage/3600;if($null -ne $u.Mode){$period.ModeGameHours=$u.Mode/3600}}
         $periods.Insert(0,$period)
     }
     return @{Rows=$rows;Periods=$periods;Details=$details;Summary="电量记录 $known 个周期 · 无电量 $missing 个周期 · 含会话推算 $estimated 个周期。选择日期查看来源及覆盖；估＝会话推算，*＝部分覆盖。"}
