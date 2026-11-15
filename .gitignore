@@ -33,3 +33,11 @@ onboarding.json
 dist/
 workspace.settings.json
 games.sessions.history.json
+ai.settings.json
+ai.snapshot.json
+ai.usage.db*
+ai.usage.history.json
+ai.charges.json
+ai.collector.*
+ai.*.tmp
+ai.backfill.history.json

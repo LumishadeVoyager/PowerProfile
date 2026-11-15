@@ -8,7 +8,7 @@ function Get-WorkspacePreferences([string]$Root=(Get-WorkspaceRoot)){
     $devices=if($value.devices){$value.devices}else{[PSCustomObject]@{}}
     $textScale=if($value.textScale -in @(100,125,150)){[int]$value.textScale}else{100}
     $motion=if($value.motion -is [bool]){[bool]$value.motion}else{$true}
-    return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices;motion=$motion;glass=$(if($value.glass -is [bool]){$value.glass}else{$true})}
+    return [PSCustomObject]@{theme=$theme;textScale=$textScale;metrics=$metrics;devices=$devices;aiSource=$(if($value.aiSource -in @(0,1)){[int]$value.aiSource}else{0});aiCurrency=$(if($value.aiCurrency -in @('USD','CNY')){$value.aiCurrency}else{'USD'});motion=$motion;glass=$(if($value.glass -is [bool]){$value.glass}else{$true})}
 }
 function Save-WorkspacePreferences($Preferences,[string]$Root=(Get-WorkspaceRoot)){Write-AtomicJson (Join-Path $Root 'workspace.settings.json') $Preferences -Pretty}
 function Get-WorkspaceEnergyDataUncached($State,[string]$Group='Day',[int]$Count=30,$From=$null,$To=$null,[int]$DayType=0){

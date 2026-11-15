@@ -3,6 +3,7 @@ if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScri
 . (Join-Path $PSScriptRoot 'PowerProfileInsights.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileWorkspaceAsync.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileConnectionUI.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileAI.ps1')
 $Script:Workspace=$null
 function Show-WorkspaceDialog($Form){
     [ProfileWorkspaceForm]::ScaleDialog($Form,(Get-WorkspacePreferences).textScale)
@@ -38,8 +39,10 @@ function Select-WorkspaceDevice {
 function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
     $w=$Script:Workspace;$t=$w.Tag
     try{
+        if(Invoke-AICommand $Action){return}
         if(Invoke-InsightsCommand $Action $Id){return}
         switch($Action){
+            'AIColumns'{foreach($i in @(2,5,6)){$w.AIGrid.Columns[$i].Visible=-not $w.AIGrid.Columns[$i].Visible};return}
             'Navigate'{$w.Navigate($Id);return}
             'Glass'{$prefs=Get-WorkspacePreferences;$prefs.glass=$w.Glass.Checked;Save-WorkspacePreferences $prefs;return}
             'Motion'{$prefs=Get-WorkspacePreferences;$prefs.motion=$w.Motion.Checked;Save-WorkspacePreferences $prefs;return}
@@ -141,6 +144,7 @@ function Update-ProfileWorkspace {
             $w.TaskInfo.Text="$(Format-EnergyCalendarDate $week) — $(Format-EnergyCalendarDate $week.AddDays(6)) · $(if($hub.Config.enabled -and $hub.Fresh){'● 中枢运行中'}elseif(-not $hub.Config.enabled){'Ⅱ 中枢已暂停'}else{'? 中枢响应过期'}) · 冲突 $($plan.Conflicts.Count) 项。时间轴为计划；是否执行以读回状态为准。"
         }
     }
+    Update-WorkspaceAI
     if($t.PendingRequest){$operation=@($hub.Status.operations|Where-Object {$_.id -eq $t.PendingRequest})[0];if($operation){$w.Footer.Text=@{sending='◷ 正在发送';checking='◷ 等待实际状态读回';confirmed='✓ 已完成并读回';failed='! 操作失败'}[$operation.phase]+' · '+$operation.message;if($operation.phase -in @('confirmed','failed')){$t.PendingRequest=$null;$t.DeviceKey=''}}elseif($t.PendingSince -and ([DateTime]::UtcNow-$t.PendingSince).TotalSeconds -gt 120){$w.Footer.Text='! 请求已超时，未确认执行；请检查连接和设备实际状态后再试。';$t.PendingRequest=$null}}
 }
 function Show-ProfileWorkspace {
@@ -149,14 +153,15 @@ function Show-ProfileWorkspace {
     Initialize-EnergyService
     $prefs=Get-WorkspacePreferences;$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w
     $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart)
+    $aiChart=New-Object ProfileInteractiveTimeline;$aiChart.Dock='Fill';$aiChart.AIOnly=$true;$w.AIChartHost.Controls.Add($aiChart)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=2000
-    $w.Tag=@{Chart=$chart;Timer=$timer;EnergyKey='';DeviceKey='';ScheduleKey='';EnergyData=@{Details=@{}};PendingRequest=$null;Suppress=$false;DeferModels=(-not $ReturnForm);ModelReady=@{};PageSignatures=@{}}
+    $w.Tag=@{AIChart=$aiChart;Chart=$chart;Timer=$timer;EnergyKey='';DeviceKey='';ScheduleKey='';EnergyData=@{Details=@{}};PendingRequest=$null;Suppress=$false;DeferModels=(-not $ReturnForm);ModelReady=@{};PageSignatures=@{}}
     $tModel=New-Object Windows.Forms.Timer;$tModel.Interval=30;$w.Tag.ModelTimer=$tModel;$tModel.Add_Tick({Complete-WorkspaceModels})
-    $prefs=Get-WorkspacePreferences;$mode=[array]::IndexOf(@('System','Light','Dark'),$prefs.theme);$w.Theme.SelectedIndex=$mode;$w.SetTheme($mode)
+    $prefs=Get-WorkspacePreferences;$w.AISource.SelectedIndex=$prefs.aiSource;$w.AICurrency.SelectedItem=$prefs.aiCurrency;$mode=[array]::IndexOf(@('System','Light','Dark'),$prefs.theme);$w.Theme.SelectedIndex=$mode;$w.SetTheme($mode)
     foreach($key in $w.MetricOptions.Keys){$visible=$prefs.metrics -contains $key;$w.MetricOptions[$key].Checked=$visible;$w.SetMetricVisible($key,$visible)}
     $w.add_Command({param($sender,$eventArgs) if(-not $sender.Tag.Suppress){Invoke-WorkspaceCommand $eventArgs.Action $eventArgs.Id}})
     $chart.add_PeriodSelected({param($sender,$eventArgs) Invoke-WorkspaceCommand 'ChartSelection' $eventArgs.Key})
-    $timer.Add_Tick({if($Script:Workspace -and $Script:Workspace.Visible){try{if($Script:Workspace.Tag.DeferModels -and $Script:Workspace.ActivePage -in @('Energy','Games')){Start-WorkspaceModels}else{Update-ProfileWorkspace}}catch{$Script:Workspace.Footer.Text='! 状态暂不可读，保留现有显示；下轮自动重试';Write-ProfileEvent 'workspace.refresh.failed' $_.Exception.Message 'WARN'}}})
+    $timer.Add_Tick({if($Script:Workspace -and $Script:Workspace.Visible){try{if($Script:Workspace.Tag.DeferModels -and $Script:Workspace.ActivePage -in @('Energy','Games')){Start-WorkspaceModels;Update-WorkspaceAI}else{Update-ProfileWorkspace}}catch{$Script:Workspace.Footer.Text='! 状态暂不可读，保留现有显示；下轮自动重试';Write-ProfileEvent 'workspace.refresh.failed' $_.Exception.Message 'WARN'}}})
     $w.Add_Disposed({param($sender,$eventArgs) $sender.Tag.ModelTimer.Stop();$sender.Tag.ModelTimer.Dispose();if($sender.Tag.ModelJob){$sender.Tag.ModelJob.PowerShell.Stop();$sender.Tag.ModelJob.PowerShell.Dispose()};$sender.Tag.Timer.Stop();$sender.Tag.Timer.Dispose();if($sender.Icon){$sender.Icon.Dispose()};$Script:Workspace=$null})
     [Windows.Forms.Application]::add_ApplicationExit({if($Script:Workspace){$Script:Workspace.Dispose()}})
     $chart.DarkMode=[ProfileTheme]::Dark;$chart.BackColor=[ProfileTheme]::Surface;$chart.ForeColor=[ProfileTheme]::Text

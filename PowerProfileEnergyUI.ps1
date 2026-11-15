@@ -1,4 +1,5 @@
 ﻿# Energy monitoring is separate from settings.json and the power-control workers.
+. (Join-Path $PSScriptRoot 'PowerProfileAI.ps1')
 $Script:EnergyService=$null
 $Script:EnergyDetails=$null
 . (Join-Path $PSScriptRoot 'PowerProfileCloudHistoryUI.ps1')
@@ -17,9 +18,11 @@ function Initialize-EnergyService {
     }
     $dataRoot=if($SettingsPath){Split-Path -Parent $SettingsPath}else{$ScriptDir}
     $Script:EnergyService=New-Object ProfileEnergyService $dataRoot
+    try{Start-AIUsageMonitor}catch{}
     $Script:EnergyLogTimer=New-Object Windows.Forms.Timer
     $Script:EnergyLogTimer.Interval=10000
     $Script:EnergyLogTimer.Add_Tick({
+        try{Start-AIUsageMonitor}catch{}
         foreach($entry in $Script:EnergyService.DrainEvents()){Write-ProfileEvent $entry[0] $entry[1] $entry[2] @{source='smart-plug';childOperationId=$entry[3]}}
         if($Script:EnergyDetails -and -not $Script:EnergyDetails.IsDisposed){Update-EnergyDetails}
     })

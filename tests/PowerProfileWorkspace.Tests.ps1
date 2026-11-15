@@ -31,7 +31,7 @@ try{
     Write-AtomicJson (Join-Path $hubDir 'status.json') @{codeVersion=3;pid=0;observedAt=[DateTime]::UtcNow.ToString('o');devices=@($light,$plug);rules=@{};operations=@();enabled=$true}
     $settingsHash=(Get-FileHash $SettingsPath).Hash;$hubHash=(Get-FileHash (Join-Path $root 'devices.hub.json')).Hash
     $w=Show-ProfileWorkspace -ReturnForm;$w.Tag.Timer.Stop();$w.Show();[Windows.Forms.Application]::DoEvents()
-    Assert 'all six modules are in one native window' ($w.Pages.Count -eq 6 -and $w.Navigation.Count -eq 6)
+    Assert 'all seven modules are in one native window' ($w.Pages.Count -eq 7 -and $w.Navigation.Count -eq 7)
     Assert 'default workspace uses a light portrait canvas' ($w.ClientSize.Width -le 540 -and [Math]::Abs($w.ClientSize.Width/$w.ClientSize.Height-0.75) -lt 0.01)
     Assert 'all destinations fit across top navigation' ($w.Navigation['Overview'].Parent -eq $w.NavigationStrip -and $w.Navigation['Settings'].Right -le $w.NavigationStrip.Width)
     Assert 'long explanations and filters start collapsed' (-not $w.Sections['Runtime'].Expanded -and -not $w.Sections['EnergyFilters'].Expanded -and -not $w.Sections['GameEvidence'].Expanded)
@@ -49,6 +49,14 @@ try{
     $w.Tag.Chart.SetView(1,3);Assert 'chart range can narrow' ($w.Tag.Chart.ViewStart -eq 1 -and $w.Tag.Chart.ViewCount -eq 3)
     Invoke-WorkspaceCommand 'Series' '2:False';Assert 'series can be hidden without changing data' (-not $w.Tag.Chart.SeriesVisible[2] -and $Script:fixture.TodayKWh -eq 0.5)
     Invoke-WorkspaceCommand 'ResetChart';Assert 'chart resets viewport' ($w.Tag.Chart.ViewStart -eq 0 -and $w.Tag.Chart.ViewCount -eq 0)
+    $aiRow=[PSCustomObject]@{date=$Script:fixture.LocalDay;client='Codex';model='test-model';source='native';tokens=12000;input=5000;cached=5000;write=0;output=2000;cost=$null;currency=$null;pricedTokens=0}
+    Write-AtomicJson (Join-Path $root 'ai.snapshot.json') @{version=1;revision='fixture';startedAt=[DateTime]::UtcNow.ToString('o');updatedAt=[DateTime]::UtcNow.ToString('o');rows=@($aiRow);daily=@($aiRow);status=@{Codex='已接入';'Claude Code'='未发现本地目录'};errors=@{}}
+    $w.Navigate('AI');Assert 'AI tab shows recorded tokens with unknown prices preserved' ($w.AIGrid.Rows.Count -eq 1 -and $w.AIGrid.Rows[0].Cells[4].Value -eq '待配置' -and $w.AISummary.Text -match '12,000')
+    Assert 'AI chart uses recorded daily tokens and its own unit' ($w.Tag.AIChart.AnalyticsMode -eq 1 -and @($w.Tag.AIChart.Periods|Where-Object {$_.CodexTokens -eq 0.012}).Count -eq 1)
+    $w.Navigate('Energy');$w.AnalysisMode.SelectedIndex=1;$p=@($w.Tag.Chart.Periods|Where-Object Key -eq $Script:fixture.LocalDay)[0]
+    Assert 'integrated trend retains power cost and uses a separate million-token axis' ($w.Tag.Chart.AnalyticsMode -eq 1 -and $p.CodexTokens -eq 0.012 -and $p.Cost -eq 0.35 -and $w.Ledger.Columns[7].Visible)
+    $w.AnalysisMode.SelectedIndex=2;Assert 'unpriced AI fees remain a gap in money view' ($null -eq $p.CodexCost -and $p.CodexCostPartial)
+    $w.AnalysisMode.SelectedIndex=0
     $w.Group.SelectedIndex=1;Assert 'range labels match weekly aggregation' ([string]$w.Range.Items[0] -eq '近 4 周');$w.Group.SelectedIndex=0
     $w.Theme.SelectedIndex=2;Assert 'dark theme updates chart and surfaces' ([ProfileTheme]::Dark -and $w.Tag.Chart.DarkMode -and $w.BackColor.GetBrightness() -lt 0.3)
     $w.MetricOptions['game'].Checked=$false;Assert 'card preference persists separately' ((Get-WorkspacePreferences).metrics -notcontains 'game')
@@ -99,6 +107,7 @@ try{
     $w.Navigate('Games');$w.Navigate('Overview');$deadline.Restart();while($w.Tag.ModelJob -and $deadline.ElapsedMilliseconds -lt 10000){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(10)}
     Assert 'finished background work never navigates away from the chosen page' ($w.ActivePage -eq 'Overview' -and -not $w.Tag.ModelJob)
     Assert 'navigation and visual settings never enqueue physical operations' (-not(Test-Path (Join-Path $hubDir 'queue')))
+    Assert 'fixture workspaces never launch the real personal AI collector' (-not (Test-Path (Join-Path $root 'ai.usage.db')))
     $w.Dispose()
 }finally{
     if($Script:Workspace){$Script:Workspace.Dispose()};if($Script:EnergyService){$Script:EnergyService.Dispose()};if($Script:EnergyLogTimer){$Script:EnergyLogTimer.Dispose()};if($Script:DeviceHubTick){$Script:DeviceHubTick.Dispose()}

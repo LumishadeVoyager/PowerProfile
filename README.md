@@ -1,12 +1,12 @@
-# PowerProfile — CPU 电源模式自动切换器
+﻿# PowerProfile — CPU 电源模式自动切换器
 
 Windows PowerShell 5.1 托盘工具。可放在任意本地目录；本机部署在 `E:\PowerProfile\`。
 
-v1.4.0 保留 3:4 纵向小窗口，采用分层总览、后台视图准备、设备卡片复用和可关闭的标题 / 导航毛玻璃，保留游戏分析、用电日历、明细导出与设备定时控制。详情见 [工作台手册](WORKSPACE.md)。
+v1.5.0 新增 AI 用量与费用看板，自动回填本机可读取的 Codex、Claude Code 和 CC Switch 历史，展示累计 tokens、按币种分开的费用估算及计价覆盖；“趋势”页可叠加用电与 AI 曲线。保留 3:4 纵向小窗口、分层总览、后台视图准备及可选毛玻璃。AI 采集需要 Python 3，缺价显示“待配置”。详见 [AI 使用手册](AI_USAGE.md) 和 [工作台手册](WORKSPACE.md)。
 
 ## 下载与首次使用
 
-从 [GitHub Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载正式 Windows ZIP，完整解压后用管理员 Windows PowerShell 运行 `Install.ps1`。新用户请先阅读 [使用手册](USER_GUIDE.md)；[v1.4.0 发布说明](RELEASE_NOTES_1.4.0.md) 包含本次稳定性修复。首次运行有指南，无需米家插座也可使用电源档位。
+从 [GitHub Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载正式 Windows ZIP，完整解压后用管理员 Windows PowerShell 运行 `Install.ps1`。新用户请先阅读 [使用手册](USER_GUIDE.md)；[v1.5.0 发布说明](RELEASE_NOTES_1.5.0.md) 包含本次功能与限制。首次运行有指南，无需米家插座也可使用电源档位。
 
 正式分发版默认每 24 小时自动检查并下载稳定版，校验后下次启动托盘安装；源码 / Git 目录不被 OTA 覆盖。更新保留个人配置、授权、设备任务和历史。设置中的“使用指南与自动更新”可查看状态或关闭自动检查。私有仓库需授权访问，私有 OTA 另需 GitHub CLI 登录。
 

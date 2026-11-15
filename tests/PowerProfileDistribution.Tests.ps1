@@ -27,7 +27,7 @@ try {
     $source=Join-Path $tmp 'source';[void][IO.Directory]::CreateDirectory($source)
     Get-ChildItem $project -File | Where-Object {Test-ProfilePackagePath $_.Name} | Copy-Item -Destination $source
     Copy-Item (Join-Path $project 'legacy') (Join-Path $source 'legacy') -Recurse
-    $privateFiles=@('settings.json','energy.settings.json','devices.hub.json','cstate.settings.json','usage.logs.history.json','games.sessions.history.json')
+    $privateFiles=@('settings.json','energy.settings.json','devices.hub.json','cstate.settings.json','usage.logs.history.json','games.sessions.history.json','ai.settings.json','ai.snapshot.json','ai.usage.db','ai.usage.history.json','ai.backfill.history.json','ai.charges.json','ai.collector.lock')
     foreach($private in $privateFiles){'private fixture'|Set-Content (Join-Path $source $private)}
     @{version='2.0.0';distribution='source'}|ConvertTo-Json|Set-Content (Join-Path $source 'version.json')
     $out=Join-Path $tmp 'out';& (Join-Path $project 'Build-Release.ps1') -Source $source -Output $out
