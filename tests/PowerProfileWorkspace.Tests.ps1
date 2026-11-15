@@ -75,6 +75,7 @@ try{
     $w.Theme.SelectedIndex=2;Assert 'dark theme updates chart and surfaces' ([ProfileTheme]::Dark -and $w.Tag.Chart.DarkMode -and $w.BackColor.GetBrightness() -lt 0.3)
     $standardBorder=$w.Ledger.CellBorderStyle;$standardCombo=$w.AISource.DrawMode;$standardTextBorder=$w.AISearch.BorderStyle
     $w.Skin.SelectedIndex=0;Assert 'liquid skin is global and persists independently from dark mode' ([ProfileSkin]::Liquid -and (Get-WorkspacePreferences).skin -eq 'Liquid' -and [ProfileTheme]::Dark -and $w.AITokens.Value.BackColor -eq [Drawing.Color]::Transparent)
+    Assert 'liquid body keeps GDI controls on a readable opaque client area' ($w.Opacity -eq 1 -and $w.BackColor.A -eq 255)
     Assert 'charts and native tables participate in liquid styling' ($null -ne $w.Tag.Chart.BackgroundPainter -and $null -ne $w.Tag.AIChart.BackgroundPainter -and $w.Ledger.CellBorderStyle -eq 'SingleHorizontal' -and $w.AISource.DrawMode -eq 'OwnerDrawFixed')
     $popup=New-Object Windows.Forms.Form;Initialize-ModernForm $popup 'Skin fixture' 350 180
     $popupText=New-Object Windows.Forms.TextBox;$popupText.BorderStyle='None';$popup.Controls.Add($popupText)
