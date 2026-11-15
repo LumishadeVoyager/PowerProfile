@@ -11,9 +11,9 @@ using System.Windows.Forms;
 
 public sealed class ProfileHeatDay {public DateTime Date;public double? Value;public string Detail;public bool Excluded;}
 public sealed class ProfileCalendarHeatmap : Control {
-    public List<ProfileHeatDay> Days=new List<ProfileHeatDay>();public int Metric;int focused;readonly ToolTip tip=new ToolTip();readonly List<Tuple<Rectangle,ProfileHeatDay>> hit=new List<Tuple<Rectangle,ProfileHeatDay>>();
+    public List<ProfileHeatDay> Days=new List<ProfileHeatDay>();public int Metric;int focused;readonly ProfileHoverTip tip;readonly List<Tuple<Rectangle,ProfileHeatDay>> hit=new List<Tuple<Rectangle,ProfileHeatDay>>();
     public event EventHandler<ProfileWorkspaceCommand> Selected;
-    public ProfileCalendarHeatmap(){DoubleBuffered=true;Height=240;AccessibleName="按星期排列的用电日历热力图";TabStop=true;}
+    public ProfileCalendarHeatmap(){DoubleBuffered=true;Height=240;AccessibleName="按星期排列的用电日历热力图";TabStop=true;tip=new ProfileHoverTip(this);}
     int Capacity {get{return Math.Max(4,(Width-58)/20);}}
     int Weeks {get{if(Days.Count==0)return 1;var first=Days.Min(d=>d.Date).Date;first=first.AddDays(-(((int)first.DayOfWeek+6)%7));return Math.Max(1,(Days.Max(d=>d.Date).Date-first).Days/7+1);}}
     public void Fit(){int cell=Math.Min(28,Math.Max(14,(Width-58)/Math.Min(Capacity,Weeks)));int height=((Weeks+Capacity-1)/Capacity)*(7*cell+48)+34;if(Height!=height)Height=height;Invalidate();}
@@ -31,7 +31,7 @@ public sealed class ProfileCalendarHeatmap : Control {
         }
         TextRenderer.DrawText(g,"浅 → 深 · 斜线缺失 · 虚线筛除",Font,new Rectangle(4,Height-28,Math.Max(1,Width-8),28),ProfileTheme.Muted,TextFormatFlags.EndEllipsis);
     }
-    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));tip.SetToolTip(this,item==null?"":item.Item2.Date.ToString("yyyy-MM-dd")+" "+new[]{"周日","周一","周二","周三","周四","周五","周六"}[(int)item.Item2.Date.DayOfWeek]+"\n"+item.Item2.Detail);}
+    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));tip.Update(item==null?"":item.Item2.Date.ToString("yyyy-MM-dd")+" "+new[]{"周日","周一","周二","周三","周四","周五","周六"}[(int)item.Item2.Date.DayOfWeek]+"\n"+(item.Item2.Detail??"").Split('\n')[0].TrimEnd('\r'));}
     protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));if(item!=null){Focus();focused=Days.OrderBy(x=>x.Date).ToList().IndexOf(item.Item2);if(Selected!=null)Selected(this,new ProfileWorkspaceCommand("HeatDate",item.Item2.Date.ToString("yyyy-MM-dd")));}}
     protected override bool IsInputKey(Keys key){return key==Keys.Left||key==Keys.Right||key==Keys.Up||key==Keys.Down||key==Keys.Home||key==Keys.End||base.IsInputKey(key);}
     protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);if(Days.Count==0)return;int delta=e.KeyCode==Keys.Left?-7:e.KeyCode==Keys.Right?7:e.KeyCode==Keys.Up?-1:e.KeyCode==Keys.Down?1:0;focused=Math.Max(0,Math.Min(Days.Count-1,focused+delta));if(e.KeyCode==Keys.Home)focused=0;if(e.KeyCode==Keys.End)focused=Days.Count-1;var day=Days.OrderBy(x=>x.Date).ElementAt(focused);AccessibleDescription=day.Date.ToString("yyyy-MM-dd")+" "+day.Detail;if(e.KeyCode==Keys.Enter&&Selected!=null)Selected(this,new ProfileWorkspaceCommand("HeatDate",day.Date.ToString("yyyy-MM-dd")));if(delta!=0||e.KeyCode==Keys.Enter||e.KeyCode==Keys.Home||e.KeyCode==Keys.End)e.Handled=true;Invalidate();}

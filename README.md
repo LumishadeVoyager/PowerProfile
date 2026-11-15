@@ -2,11 +2,11 @@
 
 Windows PowerShell 5.1 托盘工具。可放在任意本地目录；本机部署在 `E:\PowerProfile\`。
 
-v1.3.1 使用轻量的 3:4 纵向工作台：顶部短导航、两列卡片、折叠详情和可关闭的轻量动画。保留独立游戏会话分析、用电热力图、星期 / 上期对比、明细筛选与 CSV / PNG / 月报导出，以及设备定时控制。详情见 [工作台手册](WORKSPACE.md)。
+v1.3.2 使用轻量的 3:4 纵向工作台，并修复详情展开后不可见和热力图提示闪烁。顶部短导航、两列卡片、按需展开与可关闭的轻量动画，保留游戏会话分析、用电热力图、明细导出和设备定时控制。详情见 [工作台手册](WORKSPACE.md)。
 
 ## 下载与首次使用
 
-从 [GitHub Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载正式 Windows ZIP，完整解压后用管理员 Windows PowerShell 运行 `Install.ps1`。新用户请先阅读 [使用手册](USER_GUIDE.md)；[v1.3.1 发布说明](RELEASE_NOTES_1.3.1.md) 包含布局与交互变化。首次运行有指南，无需米家插座也可使用电源档位。
+从 [GitHub Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载正式 Windows ZIP，完整解压后用管理员 Windows PowerShell 运行 `Install.ps1`。新用户请先阅读 [使用手册](USER_GUIDE.md)；[v1.3.2 发布说明](RELEASE_NOTES_1.3.2.md) 包含本次稳定性修复。首次运行有指南，无需米家插座也可使用电源档位。
 
 正式分发版默认每 24 小时自动检查并下载稳定版，校验后下次启动托盘安装；源码 / Git 目录不被 OTA 覆盖。更新保留个人配置、授权、设备任务和历史。设置中的“使用指南与自动更新”可查看状态或关闭自动检查。私有仓库需授权访问，私有 OTA 另需 GitHub CLI 登录。
 

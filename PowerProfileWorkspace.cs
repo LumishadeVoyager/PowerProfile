@@ -76,10 +76,21 @@ public sealed class ProfileActionButton : Button {
 public sealed class ProfileDisclosure : Panel {
     public readonly Button Toggle=new ProfileActionButton();public readonly FlowLayoutPanel Body=new FlowLayoutPanel();bool expanded,laying;string title;
     public string Caption {get{return title;}set{title=value;Toggle.Text=(expanded?"−  ":"＋  ")+title;}}
-    public bool Expanded {get{return expanded;}set{expanded=value;Toggle.Text=(value?"−  ":"＋  ")+title;Toggle.AccessibleDescription=value?"已展开":"已折叠";Body.Visible=value;PerformLayout();if(Parent!=null)Parent.PerformLayout();}}
+    public bool Expanded {get{return expanded;}set{bool opening=value&&!expanded;expanded=value;Toggle.Text=(value?"−  ":"＋  ")+title;Toggle.AccessibleDescription=value?"已展开":"已折叠";Body.Visible=value;PerformLayout();if(Parent!=null)Parent.PerformLayout();if(opening&&IsHandleCreated&&Visible)BeginInvoke((Action)(()=>{if(!IsDisposed&&expanded&&Visible)RevealContents();}));}}
     public ProfileDisclosure(string title){this.title=title;DoubleBuffered=true;Margin=new Padding(0,2,0,8);Toggle.Height=32;Toggle.Text="＋  "+title;Toggle.AccessibleName=title;Toggle.Click+=(s,e)=>Expanded=!Expanded;Body.FlowDirection=FlowDirection.TopDown;Body.WrapContents=false;Body.AutoSize=true;Body.AutoSizeMode=AutoSizeMode.GrowAndShrink;Body.Margin=Padding.Empty;Controls.Add(Body);Controls.Add(Toggle);Body.SizeChanged+=(s,e)=>PerformLayout();Body.Visible=false;Height=36;}
     public void Add(params Control[] controls){foreach(var c in controls)Body.Controls.Add(c);PerformLayout();}
+    void RevealContents(){ScrollableControl host=null;for(Control c=Parent;c!=null;c=c.Parent){var candidate=c as ScrollableControl;if(candidate!=null&&candidate.AutoScroll){host=candidate;break;}}if(host==null)return;host.PerformLayout();var bounds=host.RectangleToClient(RectangleToScreen(ClientRectangle));int y=-host.AutoScrollPosition.Y,space=host.ClientSize.Height;if(bounds.Height>space-12)y+=bounds.Top-6;else if(bounds.Bottom>space-6)y+=bounds.Bottom-space+6;else if(bounds.Top<0)y+=bounds.Top-6;host.AutoScrollPosition=new Point(-host.AutoScrollPosition.X,Math.Max(0,y));}
     protected override void OnLayout(LayoutEventArgs e){base.OnLayout(e);if(laying)return;laying=true;try{int width=Math.Max(50,ClientSize.Width);Toggle.SetBounds(0,0,width,Math.Max(32,Toggle.Font.Height+14));Body.Location=new Point(0,Toggle.Bottom+6);Body.MinimumSize=Size.Empty;Body.MaximumSize=new Size(width,0);Body.MinimumSize=new Size(width,0);foreach(Control c in Body.Controls){c.Dock=DockStyle.None;c.Width=width-4;if(c is Label)((Label)c).MaximumSize=new Size(width-4,0);}Body.PerformLayout();int h=expanded?Body.Bottom+4:Toggle.Bottom+2;if(Height!=h)Height=h;}finally{laying=false;}}
+}
+// Keep automatic tooltip registration stable while moving inside one hover target.
+public sealed class ProfileHoverTip : IDisposable {
+    readonly Control owner;readonly ToolTip tip=new ToolTip{InitialDelay=400,ReshowDelay=150,AutoPopDelay=12000,UseAnimation=false,UseFading=false};string current="";bool disposed;
+    public ProfileHoverTip(Control owner){this.owner=owner;owner.MouseLeave+=Reset;owner.MouseDown+=Reset;owner.MouseWheel+=Reset;owner.SizeChanged+=Reset;owner.VisibleChanged+=Reset;owner.Disposed+=OwnerDisposed;}
+    public bool Update(string text){if(disposed)return false;text=text??"";if(!owner.Visible)text="";if(String.Equals(current,text,StringComparison.Ordinal))return false;current=text;if(text.Length==0&&owner.IsHandleCreated)tip.Hide(owner);tip.SetToolTip(owner,text);return true;}
+    void Reset(object sender,EventArgs e){Clear();}
+    void OwnerDisposed(object sender,EventArgs e){Dispose();}
+    public void Clear(){Update("");}
+    public void Dispose(){if(disposed)return;disposed=true;owner.MouseLeave-=Reset;owner.MouseDown-=Reset;owner.MouseWheel-=Reset;owner.SizeChanged-=Reset;owner.VisibleChanged-=Reset;owner.Disposed-=OwnerDisposed;tip.Dispose();}
 }
 public sealed class ProfileNavigation : Panel {
     readonly Timer timer=new Timer{Interval=16};float left,width,startLeft,startWidth,targetLeft,targetWidth;readonly System.Diagnostics.Stopwatch watch=new System.Diagnostics.Stopwatch();
@@ -110,9 +121,9 @@ public sealed class ProfileMetric : ProfileSurface {
 }
 public sealed class ProfileScheduleCanvas : Control {
     public List<ProfileScheduleSlot> Slots=new List<ProfileScheduleSlot>();public DateTime WeekStart=DateTime.Today;
-    readonly ToolTip tip=new ToolTip();readonly List<Tuple<RectangleF,ProfileScheduleSlot>> hit=new List<Tuple<RectangleF,ProfileScheduleSlot>>();
+    readonly ProfileHoverTip tip;readonly List<Tuple<RectangleF,ProfileScheduleSlot>> hit=new List<Tuple<RectangleF,ProfileScheduleSlot>>();
     public event EventHandler<ProfileWorkspaceCommand> Selected;
-    public ProfileScheduleCanvas(){DoubleBuffered=true;Height=470;Dock=DockStyle.Top;AccessibleName="七日设备任务时间轴";SetStyle(ControlStyles.Selectable,true);TabStop=true;}
+    public ProfileScheduleCanvas(){DoubleBuffered=true;Height=470;Dock=DockStyle.Top;AccessibleName="七日设备任务时间轴";SetStyle(ControlStyles.Selectable,true);TabStop=true;tip=new ProfileHoverTip(this);}
     protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=SmoothingMode.AntiAlias;g.Clear(ProfileTheme.Surface);hit.Clear();float left=106,w=Math.Max(1,Width-left-16),row=Math.Max(53,(Height-38)/7f);
         using(var text=new SolidBrush(ProfileTheme.Muted))using(var line=new Pen(ProfileTheme.Border)){
             for(int h=0;h<=24;h+=4){float x=left+w*h/24;string label=h.ToString("00")+":00";float labelWidth=g.MeasureString(label,Font).Width;g.DrawString(label,Font,text,Math.Max(0,Math.Min(Width-labelWidth-2,x-labelWidth/2)),3);g.DrawLine(line,x,27,x,Height-4);}
@@ -131,7 +142,7 @@ public sealed class ProfileScheduleCanvas : Control {
             if(Slots.Count==0)g.DrawString("本周没有任务；选择设备后可添加定时或保持规则",Font,text,left+10,Height/2);
         }
     }
-    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));tip.SetToolTip(this,item==null?"":item.Item2.Device+" · "+item.Item2.Name+"\n"+item.Item2.Start.ToString("MM-dd ddd HH:mm")+" — "+item.Item2.End.ToString("MM-dd ddd HH:mm")+"\n"+item.Item2.Status);}
+    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));tip.Update(item==null?"":item.Item2.Device+" · "+item.Item2.Name+"\n"+item.Item2.Start.ToString("MM-dd ddd HH:mm")+" — "+item.Item2.End.ToString("MM-dd ddd HH:mm")+"\n"+item.Item2.Status);}
     protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);var item=hit.FirstOrDefault(x=>x.Item1.Contains(e.Location));if(item!=null&&Selected!=null)Selected(this,new ProfileWorkspaceCommand("SelectRule",item.Item2.Id));}
     protected override void Dispose(bool disposing){if(disposing)tip.Dispose();base.Dispose(disposing);}
 }
@@ -175,7 +186,7 @@ public sealed class ProfileWorkspaceForm : Form {
         var home=Column(Pages["Overview"]);home.Controls.Add(Row(Button("自动","Auto"),Button("静音","Idle"),Button("均衡","Balanced"),Button("游戏","Game")));
         foreach(var entry in new[]{new[]{"mode","电源档位"},new[]{"power","插座输入"},new[]{"cost","今日电费"},new[]{"usage","电脑使用"},new[]{"game","游戏时长"},new[]{"next","设备任务"}}){var card=new ProfileMetric(entry[1]);Metrics[entry[0]]=card;MetricHost.Controls.Add(card);}home.Controls.Add(MetricHost);
         home.Controls.Add(Row(Button("硬件监测","Hardware"),Button("连接设备","Connection"),Button("查看日志","Logs")));
-        PrepareDetail(OverviewReason);PrepareDetail(Runtime);AddSection(home,"Runtime","运行详情",OverviewReason,Runtime);
+        PrepareDetail(OverviewReason);PrepareDetail(Runtime);Runtime.Text="正在读取运行状态…";OverviewReason.Text="暂无新的档位识别记录。";AddSection(home,"Runtime","运行详情",Runtime,OverviewReason);
         var energy=Column(Pages["Energy"]);Range=Combo(new[]{"近 7 天","近 30 天","近 90 天"});Range.SelectedIndex=1;Range.Width=125;Group=Combo(new[]{"按日","按周","按月"});Group.SelectedIndex=0;Group.Width=90;
         energy.Controls.Add(Row(Range,Group,MenuButton("更多",new[]{new[]{"连接与电价","Connection"},new[]{"补录米家历史","Cloud"},new[]{"刷新采样","RefreshEnergy"},new[]{"恢复图表区间","ResetChart"},new[]{"导出图表 PNG","ExportPng"},new[]{"导出当前明细 CSV","ExportCsv"},new[]{"导出所选月份报告","ExportReport"}})));
         var series=Row();string[] seriesNames={"电费","使用","高功耗","游戏"};for(int i=0;i<4;i++){int n=i;var check=new CheckBox{Text=seriesNames[i],Checked=true,AutoSize=true,Margin=new Padding(0,4,14,4)};check.CheckedChanged+=(s,e)=>Emit("Series",n+":"+check.Checked);series.Controls.Add(check);}energy.Controls.Add(series);

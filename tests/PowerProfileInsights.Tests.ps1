@@ -56,14 +56,26 @@ try{
     $html=[ProfileAnalyticsExport]::Report('Report','Scope','Summary',[string[]]@('<name>'),$rr)
     Assert 'offline report escapes log-controlled HTML' ($html.Contains('&lt;script&gt;x&lt;/script&gt;') -and -not $html.Contains('<script>'))
     $w=New-Object ProfileWorkspaceForm;$Script:Workspace=$w;$w.Tag=@{Suppress=$true;GameRows=$games;SessionDetails=@{}};$w.Show();$w.Navigate('Energy');[Windows.Forms.Application]::DoEvents()
+    $hoverTip=New-Object ProfileHoverTip $w.Insights.Heatmap
+    Assert 'new hover target registers a tooltip once' ($hoverTip.Update('2026-11-14 sample'))
+    $retargeted=0;for($i=0;$i -lt 200;$i++){if($hoverTip.Update('2026-11-14 sample')){$retargeted++}}
+    Assert 'motion inside the same target never re-registers tooltip' ($retargeted -eq 0)
+    $hoverTip.Clear();Assert 'leaving and reentering a target can show tooltip again' ($hoverTip.Update('2026-11-14 sample'))
+    $w.Insights.Heatmap.Hide();Assert 'hidden controls do not retain active tooltip text' (-not $hoverTip.Update('2026-11-14 sample'));$w.Insights.Heatmap.Show();$hoverTip.Dispose()
     Assert 'portrait ledger initially prioritizes date and main metrics' ($w.Ledger.Columns[0].Visible -and $w.Ledger.Columns[2].Visible -and -not $w.Ledger.Columns[6].Visible)
     $w.SetLedger($data.Rows.ToArray());foreach($column in $w.Ledger.Columns){$column.Visible=$true};$w.Ledger.Columns[2].Visible=$false;$table=Get-InsightsExportTable $w.Ledger
     Assert 'export uses current visible columns and displayed row order' ($table.Headers.Count -eq 6 -and $table.Headers -notcontains '电费' -and $table.Rows[0][0] -eq $data.Rows[0].Date)
     $heat=New-Object 'Collections.Generic.List[ProfileHeatDay]';foreach($r in $data.Rows){$h=New-Object ProfileHeatDay;$h.Date=$r.PeriodStart;$h.Value=$r.UsageSeconds;$heat.Add($h)};$w.Insights.Heatmap.Days=$heat;$w.Insights.Heatmap.Fit()
     $png=Join-Path $root 'chart.png';[ProfileAnalyticsExport]::SaveChart($w.Insights.Heatmap,$png,'Test','Missing is unknown');$bitmap=[Drawing.Image]::FromFile($png);try{Assert 'chart export produces an actual PNG with readable header and caption' ($bitmap.Width -eq $w.Insights.Heatmap.Width+48 -and $bitmap.Height -eq $w.Insights.Heatmap.Height+150)}finally{$bitmap.Dispose()}
+    $heat[0].Detail="1 小时`r`nLong coverage explanation";$flags=[Reflection.BindingFlags]'Instance,NonPublic';$heatControl=$w.Insights.Heatmap;$box=$heatControl.GetType().GetField('hit',$flags).GetValue($heatControl)[0].Item1
+    $move=$heatControl.GetType().GetMethod('OnMouseMove',$flags);$leave=$heatControl.GetType().GetMethod('OnMouseLeave',$flags)
+    for($i=0;$i -lt 20;$i++){$arg=New-Object Windows.Forms.MouseEventArgs None,0,($box.X+1+$i%3),($box.Y+1),0;[void]$move.Invoke($heatControl,[object[]]@($arg.PSObject.BaseObject))}
+    $heatTip=$heatControl.GetType().GetField('tip',$flags).GetValue($heatControl);$current=$heatTip.GetType().GetField('current',$flags).GetValue($heatTip)
+    Assert 'heatmap hover keeps concise dated value instead of a giant moving popup' ($current -match '周' -and $current -match '1 小时' -and $current -notmatch 'Long coverage' -and -not $heatTip.Update($current))
+    [void]$leave.Invoke($heatControl,[object[]]@([EventArgs]::Empty));Assert 'heatmap mouse leave removes the old date popup' ($heatTip.GetType().GetField('current',$flags).GetValue($heatTip) -eq '')
     $w.ClientSize=New-Object Drawing.Size 720,640;[Windows.Forms.Application]::DoEvents();Assert 'heatmap reflows within compact content width' ($w.Insights.Heatmap.Right -le $w.Insights.Width)
     Set-WorkspaceGameSessions $games;Assert 'session table keeps unknown sampled cost visible' ($w.GameSessions.Rows.Count -eq 2 -and @($w.GameSessions.Rows|Where-Object {$_.Cells[6].Value -eq '未采集'}).Count -eq 1)
-    $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart);$w.Tag.Chart=$chart;$w.Tag.SortColumn=0;$w.Tag.SortDescending=$true
+    $chart=New-Object ProfileInteractiveTimeline;Assert 'clearing inactive tooltips does not create hidden chart handles' (-not $chart.IsHandleCreated);$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart);$w.Tag.Chart=$chart;$w.Tag.SortColumn=0;$w.Tag.SortDescending=$true
     Update-WorkspaceInsights $state Day 7
     Assert 'heatmap includes every date in selected interval' ($w.Insights.Heatmap.Days.Count -eq 7 -and $chart.Periods.Count -eq 7)
     $w.SourceFilter.SelectedIndex=3;Update-WorkspaceInsights $state Day 7
