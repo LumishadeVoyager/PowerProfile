@@ -96,6 +96,10 @@ function Format-EnergyDuration($Seconds){
     if($hours -eq 0){return "$minutes 分钟"}
     return ('{0} 小时 {1:00} 分' -f $hours,($minutes%60))
 }
+function Format-EnergyCalendarDate([DateTime]$Date,[string]$Format='yyyy-MM-dd'){
+    $weekday=@('周日','周一','周二','周三','周四','周五','周六')[[int]$Date.DayOfWeek]
+    return ($Date.ToString($Format)+' '+$weekday)
+}
 function Update-EnergyRecordHint {
     if(-not $Script:EnergyDetails){return};$tag=$Script:EnergyDetails.Tag;$row=$tag.DailyGrid.CurrentRow
     if($row -and $row.Tag){$tag.Fields.recordHint.Text=$row.Tag;$Script:DashboardTip.SetToolTip($tag.Fields.recordHint,$row.Tag)}
@@ -157,10 +161,10 @@ function Update-EnergyDailyRows {
         $totals[$groupKey].KWh+=$item.Value.KWh;$totals[$groupKey].Seconds+=$item.Value.Seconds
         if($item.Value.Source -eq 'MiHome'){$totals[$groupKey].CloudDays++}else{$totals[$groupKey].LocalDays++}
     }
-    $grid.Columns[0].HeaderText=switch($view){'Week'{'周起始（周一）'};'Month'{'月份'};default{'日期'}}
+    $grid.Columns[0].HeaderText=switch($view){'Week'{'周起始（周一）'};'Month'{'月份'};default{'日期 / 星期'}}
     for($i=0;$i -lt $count;$i++){
         $start=switch($view){'Week'{$day.AddDays(-(([int]$day.DayOfWeek+6)%7)-7*$i)};'Month'{$day.AddDays(1-$day.Day).AddMonths(-$i)};default{$day.AddDays(-$i)}}
-        $groupKey=$start.ToString('yyyy-MM-dd');$date=if($view -eq 'Month'){$start.ToString('yyyy-MM')}else{$groupKey}
+        $groupKey=$start.ToString('yyyy-MM-dd');$date=if($view -eq 'Month'){$start.ToString('yyyy-MM')}else{Format-EnergyCalendarDate $start}
         $entry=if($totals.ContainsKey($groupKey)){$totals[$groupKey]}else{$null}
         $amount=if($null -ne $entry){'{0:N3}' -f $entry.KWh}else{'未采集'}
         $cost=if($null -ne $entry){Format-EnergyCost $entry.KWh $State.Price}else{'—'}
@@ -174,13 +178,20 @@ function Update-EnergyDailyRows {
         $grid.Rows[$index].Cells[4].ToolTipText='复用运行日志与有效采样估算；有运行日志时，即使插座断线仍可记录使用时长。日志缺口不补，重叠来源不相加。'
         $grid.Rows[$index].Cells[5].ToolTipText=if($u -and $null -ne $u.High){'输入功率 ≥150 W；有效统计覆盖 {0:N2} 小时，旧记录未统计部分未知。' -f ($u.Coverage/3600)}else{'旧记录没有高功耗分段统计；不当作零。'}
         $grid.Rows[$index].Cells[6].ToolTipText='复用历史游戏识别日志与当前检测结果，包含已确认游戏的菜单及后台保留期；单纯切换到游戏档不会计入，日志缺口不当作零。'
-        $period=New-Object ProfileEnergyPeriod;$period.Label=if($view -eq 'Month'){$start.ToString('yy-MM')}else{$start.ToString('MM-dd')}
+        $period=New-Object ProfileEnergyPeriod;$period.Label=if($view -eq 'Month'){$start.ToString('yy-MM')}else{Format-EnergyCalendarDate $start 'MM-dd'}
         if($entry -and $null -ne $State.Price){$period.Cost=$entry.KWh*[double]$State.Price}
         if($u -and $u.Seconds -gt 0){$period.UsageHours=$u.Seconds/3600}
         if($u -and $null -ne $u.High){$period.HighHours=$u.High/3600;$period.HighCoverageHours=$u.Coverage/3600}
         if($u -and $null -ne $u.Game){$period.GameHours=$u.Game/3600;$period.GameCoverageHours=$u.GameCoverage/3600}
         $periods.Insert(0,$period)
-        $grid.Rows[$index].Cells[0].ToolTipText=if($view -eq 'Week'){"$groupKey 至 $($start.AddDays(6).ToString('yyyy-MM-dd'))（北京时间）；本周期截至今日"}elseif($view -eq 'Month'){"自然月 $date；本周期截至今日"}else{'北京时间日期'}
+        $weekend=$view -eq 'Day' -and $start.DayOfWeek -in @([DayOfWeek]::Saturday,[DayOfWeek]::Sunday)
+        $grid.Rows[$index].Cells[0].ToolTipText=if($view -eq 'Week'){"$(Format-EnergyCalendarDate $start) 至 $(Format-EnergyCalendarDate $start.AddDays(6))（北京时间）；本周期截至今日"}elseif($view -eq 'Month'){"自然月 $date；本周期截至今日"}else{"北京时间 · $date"+$(if($weekend){' · 周末'})}
+        if($weekend){
+            $grid.Rows[$index].DefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(238,245,252)
+            $grid.Rows[$index].Cells[0].Style.ForeColor=[Drawing.Color]::FromArgb(39,106,159)
+            $grid.Rows[$index].Cells[0].Style.SelectionForeColor=[Drawing.Color]::FromArgb(39,106,159)
+            $grid.Rows[$index].Cells[0].Style.Font=$grid.ColumnHeadersDefaultCellStyle.Font
+        }
         if($null -eq $entry){foreach($column in @(1,2,3)){$grid.Rows[$index].Cells[$column].Style.ForeColor=[Drawing.Color]::FromArgb(133,142,150)}}
         if($date -eq $selectedDate){$grid.CurrentCell=$grid.Rows[$index].Cells[0]}
     }
