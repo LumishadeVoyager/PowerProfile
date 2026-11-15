@@ -73,6 +73,22 @@ try{
     $w.AnalysisMode.SelectedIndex=0
     $w.Group.SelectedIndex=1;Assert 'range labels match weekly aggregation' ([string]$w.Range.Items[0] -eq '近 4 周');$w.Group.SelectedIndex=0
     $w.Theme.SelectedIndex=2;Assert 'dark theme updates chart and surfaces' ([ProfileTheme]::Dark -and $w.Tag.Chart.DarkMode -and $w.BackColor.GetBrightness() -lt 0.3)
+    $standardBorder=$w.Ledger.CellBorderStyle;$standardCombo=$w.AISource.DrawMode;$standardTextBorder=$w.AISearch.BorderStyle
+    $w.Skin.SelectedIndex=0;Assert 'liquid skin is global and persists independently from dark mode' ([ProfileSkin]::Liquid -and (Get-WorkspacePreferences).skin -eq 'Liquid' -and [ProfileTheme]::Dark -and $w.AITokens.Value.BackColor -eq [Drawing.Color]::Transparent)
+    Assert 'charts and native tables participate in liquid styling' ($null -ne $w.Tag.Chart.BackgroundPainter -and $null -ne $w.Tag.AIChart.BackgroundPainter -and $w.Ledger.CellBorderStyle -eq 'SingleHorizontal' -and $w.AISource.DrawMode -eq 'OwnerDrawFixed')
+    $popup=New-Object Windows.Forms.Form;Initialize-ModernForm $popup 'Skin fixture' 350 180
+    $popupText=New-Object Windows.Forms.TextBox;$popupText.BorderStyle='None';$popup.Controls.Add($popupText)
+    $popupCombo=New-Object Windows.Forms.ComboBox;$popupCombo.Top=40;$popup.Controls.Add($popupCombo)
+    [ProfileTheme]::ApplyWindow($popup)
+    $popupText.ForeColor=[Drawing.Color]::FromArgb(42,55,67);Assert 'dark skin keeps asynchronously refreshed text readable' ($popupText.ForeColor.GetBrightness() -ge 0.5)
+    Assert 'secondary forms inherit active skin without changing input values' ($popupText.BorderStyle -eq 'FixedSingle' -and $popupCombo.DrawMode -eq 'OwnerDrawFixed' -and $popupText.Text -eq '')
+    $w.Skin.SelectedIndex=1;[ProfileTheme]::ApplyWindow($popup)
+    Assert 'standard skin restores original native controls and disables backdrop' (-not [ProfileSkin]::Liquid -and -not $w.GlassActive -and $w.Ledger.CellBorderStyle -eq $standardBorder -and $w.AISource.DrawMode -eq $standardCombo -and $w.AISearch.BorderStyle -eq $standardTextBorder -and $popupText.BorderStyle -eq 'None')
+    $popup.Dispose();$w.Skin.SelectedIndex=2
+    Assert 'classic header glass remains an independent skin option' ([ProfileSkin]::Kind -eq 'ClassicGlass' -and (Get-WorkspacePreferences).skin -eq 'ClassicGlass' -and $w.Glass.Enabled)
+    $w.Skin.SelectedIndex=0;$w.Navigate('AI');$w.AIView.SelectedIndex=0
+    $pixels=New-Object Drawing.Bitmap $w.Width,$w.Height;try{$w.DrawToBitmap($pixels,(New-Object Drawing.Rectangle 0,0,$pixels.Width,$pixels.Height));Assert 'liquid scene and charts render in the full portrait window' ($pixels.Width -gt 400 -and $w.AITokens.Value.Height -ge $w.AITokens.Value.Font.Height)}finally{$pixels.Dispose()}
+    $w.Skin.SelectedIndex=1
     $w.MetricOptions['game'].Checked=$false;Assert 'card preference persists separately' ((Get-WorkspacePreferences).metrics -notcontains 'game')
     $prefs=Get-WorkspacePreferences;$prefs.devices|Add-Member -NotePropertyName 'lamp' -NotePropertyValue ([PSCustomObject]@{alias='Desk lamp';room='Study';favorite=$true});Save-WorkspacePreferences $prefs
     $w.Navigate('Devices');Assert 'device cards replace raw device table' ($w.DeviceHost.Controls.Count -eq 2)

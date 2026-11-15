@@ -6,7 +6,7 @@ $ScriptDir=$root
 function Assert($Name,$Value){if(-not $Value){throw $Name};Write-Host "PASS $Name"}
 try{
     . (Join-Path $project 'PowerProfileEnergyUI.ps1');Initialize-EnergyService;$Script:EnergyService.Dispose();$Script:EnergyLogTimer.Stop()
-    Add-Type -Path @((Join-Path $project 'PowerProfileWorkspace.cs'),(Join-Path $project 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core
+    Add-Type -Path @((Join-Path $project 'PowerProfileWorkspace.cs'),(Join-Path $project 'PowerProfileSkin.cs'),(Join-Path $project 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core
     . (Join-Path $project 'PowerProfileWorkspaceData.ps1');. (Join-Path $project 'PowerProfileWorkspaceAsync.ps1');. (Join-Path $project 'PowerProfileInsights.ps1')
     $state=New-Object ProfileEnergySnapshot;$state.LocalDay='2026-11-15';$state.Price=[decimal]0.7
     foreach($entry in @(@('2026-11-15',100),@('2026-11-14',0),@('2026-11-13',3600),@('2026-11-06',7200))){$u=New-Object ProfileEnergyDay;$u.Seconds=$entry[1];$u.GameSeconds=0;$u.HighPowerSeconds=0;$state.UsageDays.Add($entry[0],$u);$d=New-Object ProfileEnergyDay;$d.KWh=$entry[1]/3600;$d.Source='MiHome';$state.Days.Add($entry[0],$d)}

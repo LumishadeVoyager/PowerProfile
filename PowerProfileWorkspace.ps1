@@ -1,10 +1,11 @@
 ﻿. (Join-Path $PSScriptRoot 'PowerProfileWorkspaceData.ps1')
-if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
+if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileSkin.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
 . (Join-Path $PSScriptRoot 'PowerProfileInsights.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileWorkspaceAsync.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileConnectionUI.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileAI.ps1')
 $Script:Workspace=$null
+$skinOptions=Get-WorkspacePreferences;[ProfileSkin]::Set($skinOptions.skin);[ProfileTheme]::Dark=($skinOptions.theme -eq 'Dark' -or ($skinOptions.theme -eq 'System' -and [ProfileTheme]::SystemDark()));[ProfileSkin]::SystemBlur=$skinOptions.glass;[ProfileSkin]::MonitorWindows()
 function Show-WorkspaceDialog($Form){
     [ProfileWorkspaceForm]::ScaleDialog($Form,(Get-WorkspacePreferences).textScale)
     [ProfileTheme]::Apply($Form,[ProfileTheme]::Dark)
@@ -44,6 +45,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
         switch($Action){
             'AIColumns'{foreach($i in @(2,5,6)){$w.AIGrid.Columns[$i].Visible=-not $w.AIGrid.Columns[$i].Visible};return}
             'Navigate'{$w.Navigate($Id);return}
+            'Skin'{$prefs=Get-WorkspacePreferences;$prefs.skin=$Id;Save-WorkspacePreferences $prefs;return}
             'Glass'{$prefs=Get-WorkspacePreferences;$prefs.glass=$w.Glass.Checked;Save-WorkspacePreferences $prefs;return}
             'Motion'{$prefs=Get-WorkspacePreferences;$prefs.motion=$w.Motion.Checked;Save-WorkspacePreferences $prefs;return}
             'GameColumns'{$show=-not $w.GameSessions.Columns[2].Visible;foreach($i in @(2,4,5,6,7)){$w.GameSessions.Columns[$i].Visible=$show};foreach($i in @(3,4,5)){$w.GameTotals.Columns[$i].Visible=$show};return}
@@ -151,7 +153,7 @@ function Show-ProfileWorkspace {
     param([string]$Page='Overview',[switch]$ReturnForm)
     if($Script:Workspace -and -not $Script:Workspace.IsDisposed){$Script:Workspace.Show();$Script:Workspace.Navigate($Page);[ProfileVisual]::ActivateDashboard($Script:Workspace.Handle);if($ReturnForm){return $Script:Workspace};return}
     Initialize-EnergyService
-    $prefs=Get-WorkspacePreferences;$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w
+    $prefs=Get-WorkspacePreferences;[ProfileSkin]::Set($prefs.skin);$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w
     $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart)
     $aiChart=New-Object ProfileInteractiveTimeline;$aiChart.Dock='Fill';$aiChart.AIOnly=$true;$w.AIChartHost.Controls.Add($aiChart)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=2000

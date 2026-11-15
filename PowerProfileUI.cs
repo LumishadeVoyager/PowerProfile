@@ -37,12 +37,13 @@ public sealed class ProfileToastForm : System.Windows.Forms.Form {
     }
 }
 public sealed class ProfileMetricBar : System.Windows.Forms.Control {
+    public Color TrackColor=Color.FromArgb(229,234,237);
     double percent=-1;
     public double Percent { get {return percent;} set {percent=value;Invalidate();} }
     public ProfileMetricBar() { SetStyle(System.Windows.Forms.ControlStyles.UserPaint|System.Windows.Forms.ControlStyles.AllPaintingInWmPaint|System.Windows.Forms.ControlStyles.OptimizedDoubleBuffer,true);Height=10; }
     protected override void OnPaint(System.Windows.Forms.PaintEventArgs e) {
         base.OnPaint(e);e.Graphics.SmoothingMode=SmoothingMode.AntiAlias;
-        using(var track=new SolidBrush(Color.FromArgb(229,234,237)))e.Graphics.FillRectangle(track,0,2,Width,6);
+        using(var track=new SolidBrush(TrackColor))e.Graphics.FillRectangle(track,0,2,Width,6);
         if(percent>=0)using(var fill=new SolidBrush(ForeColor))e.Graphics.FillRectangle(fill,0,2,(float)(Width*Math.Min(100,percent)/100),6);
     }
 }

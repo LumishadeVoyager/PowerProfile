@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -18,7 +18,7 @@ public sealed class ProfileCalendarHeatmap : Control {
     int Weeks {get{if(Days.Count==0)return 1;var first=Days.Min(d=>d.Date).Date;first=first.AddDays(-(((int)first.DayOfWeek+6)%7));return Math.Max(1,(Days.Max(d=>d.Date).Date-first).Days/7+1);}}
     public void Fit(){int cell=Math.Min(28,Math.Max(14,(Width-58)/Math.Min(Capacity,Weeks)));int height=((Weeks+Capacity-1)/Capacity)*(7*cell+48)+34;if(Height!=height)Height=height;Invalidate();}
     protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);Fit();}
-    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.Clear(ProfileTheme.Surface);hit.Clear();if(Days.Count==0){TextRenderer.DrawText(g,"所选范围暂无日期",Font,new Point(10,15),ProfileTheme.Muted);return;}var first=Days.Min(d=>d.Date).Date;first=first.AddDays(-(((int)first.DayOfWeek+6)%7));int capacity=Capacity,cell=Math.Min(28,Math.Max(14,(Width-58)/Math.Min(capacity,Weeks))),block=7*cell+48;double maximum=Days.Where(d=>!d.Excluded&&d.Value.HasValue).Select(d=>d.Value.Value).DefaultIfEmpty(1).Max();maximum=Math.Max(maximum,0.00001);
+    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;if(ProfileSkin.Liquid)ProfileSkin.Plot(this,g);else g.Clear(ProfileTheme.Surface);hit.Clear();if(Days.Count==0){TextRenderer.DrawText(g,"所选范围暂无日期",Font,new Point(10,15),ProfileTheme.Muted);return;}var first=Days.Min(d=>d.Date).Date;first=first.AddDays(-(((int)first.DayOfWeek+6)%7));int capacity=Capacity,cell=Math.Min(28,Math.Max(14,(Width-58)/Math.Min(capacity,Weeks))),block=7*cell+48;double maximum=Days.Where(d=>!d.Excluded&&d.Value.HasValue).Select(d=>d.Value.Value).DefaultIfEmpty(1).Max();maximum=Math.Max(maximum,0.00001);
         Color accent=Metric==0?Color.FromArgb(32,139,111):Metric==3?Color.FromArgb(204,125,32):Metric==4?Color.FromArgb(130,83,176):ProfileTheme.Accent;
         for(int b=0;b<(Weeks+capacity-1)/capacity;b++)for(int r=0;r<7;r++)TextRenderer.DrawText(g,new[]{"周一","周二","周三","周四","周五","周六","周日"}[r],Font,new Point(2,b*block+29+r*cell),r>=5?ProfileTheme.Accent:ProfileTheme.Muted);
         foreach(var d in Days){int offset=(d.Date.Date-first).Days,col=offset/7,row=offset%7,b=col/capacity;var rect=new Rectangle(49+(col%capacity)*cell,b*block+27+row*cell,cell-3,cell-3);

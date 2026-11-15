@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -19,6 +19,7 @@ public sealed class ProfileEnergyPeriod {
 
 // Costs and hours have separate axes; unknown periods remain gaps.
 public sealed class ProfileEnergyTimeline : Control {
+    public Action<Control,Graphics> BackgroundPainter;
     public List<ProfileEnergyPeriod> Periods=new List<ProfileEnergyPeriod>();
     readonly ToolTip tip=new ToolTip();int lastIndex=-1;
     static readonly Color[] colors={Color.FromArgb(39,106,159),Color.FromArgb(32,139,111),Color.FromArgb(212,130,43),Color.FromArgb(130,83,176)};
@@ -26,7 +27,7 @@ public sealed class ProfileEnergyTimeline : Control {
     RectangleF Plot {get{return new RectangleF(44,40,Math.Max(1,Width-88),Math.Max(1,Height-70));}}
     static double? Value(ProfileEnergyPeriod p,int series){return series==0?p.Cost:series==1?p.UsageHours:series==2?p.HighHours:p.GameHours;}
     protected override void OnPaint(PaintEventArgs e){
-        base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;var area=Plot;
+        base.OnPaint(e);var g=e.Graphics;if(BackgroundPainter!=null)BackgroundPainter(this,g);g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;var area=Plot;
         double maxCost=0.1,maxHours=1;bool any=false;
         foreach(var p in Periods){if(p.Cost.HasValue){maxCost=Math.Max(maxCost,p.Cost.Value);any=true;}for(int s=1;s<4;s++){var value=Value(p,s);if(value.HasValue){maxHours=Math.Max(maxHours,value.Value);any=true;}}}
         maxCost=Math.Ceiling(maxCost*10)/10;maxHours=Math.Ceiling(maxHours);

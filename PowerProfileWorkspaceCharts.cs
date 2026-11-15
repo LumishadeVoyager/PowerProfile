@@ -5,7 +5,7 @@ public sealed class ProfileEnergySelectionEventArgs : System.EventArgs {
 }
 public sealed class ProfileInteractiveTimeline : System.Windows.Forms.Control {
     public System.Collections.Generic.List<ProfileEnergyPeriod> Periods=new System.Collections.Generic.List<ProfileEnergyPeriod>();
-    public int AnalyticsMode;public bool AIOnly;public string AICurrency="USD";
+    public System.Action<System.Windows.Forms.Control,System.Drawing.Graphics> BackgroundPainter;public int AnalyticsMode;public bool AIOnly;public string AICurrency="USD";
     public bool[] SeriesVisible={true,true,true,true};public bool DarkMode;
     public int ViewStart {get;private set;}public int ViewCount {get;private set;}
     public int SelectedIndex {get;private set;}
@@ -22,7 +22,7 @@ public sealed class ProfileInteractiveTimeline : System.Windows.Forms.Control {
     public void SetView(int start,int count){ClearTip();ViewStart=System.Math.Max(0,System.Math.Min(start,System.Math.Max(0,Periods.Count-1)));ViewCount=System.Math.Max(1,System.Math.Min(count,Periods.Count-ViewStart));Invalidate();}
     public void SelectIndex(int index){if(index<0||index>=Periods.Count)return;SelectedIndex=index;if(PeriodSelected!=null)PeriodSelected(this,new ProfileEnergySelectionEventArgs(index,Periods[index].Key));Invalidate();}
     int IndexAt(int x){return Count<1?-1:ViewStart+(int)System.Math.Round(System.Math.Max(0,System.Math.Min(1,(x-Plot.Left)/Plot.Width))*(Count-1));}
-    protected override void OnPaint(System.Windows.Forms.PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;g.Clear(BackColor);var area=Plot;double cost=0.1,hours=AnalyticsMode>0?0.001:1;bool any=false;
+    protected override void OnPaint(System.Windows.Forms.PaintEventArgs e){base.OnPaint(e);var g=e.Graphics;g.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.AntiAlias;if(BackgroundPainter!=null)BackgroundPainter(this,g);else g.Clear(BackColor);var area=Plot;double cost=0.1,hours=AnalyticsMode>0?0.001:1;bool any=false;
         if(ViewStart>=Periods.Count){ViewStart=0;ViewCount=0;}
         for(int i=ViewStart;i<ViewStart+Count;i++)for(int s=0;s<4;s++){var v=Value(Periods[i],s);if(!SeriesVisible[s]||!v.HasValue)continue;any=true;if(s==0)cost=System.Math.Max(cost,v.Value);else hours=System.Math.Max(hours,v.Value);}
         cost=System.Math.Ceiling(cost*10)/10;hours=AnalyticsMode>0?System.Math.Max(0.001,hours):System.Math.Ceiling(hours);

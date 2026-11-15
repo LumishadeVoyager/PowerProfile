@@ -52,6 +52,7 @@ function Test-ProfilePackage([string]$Directory,[string]$Version){
     }
     foreach($required in @('version.json','Start-PowerProfile.ps1','PowerProfileTray.ps1','PowerProfile.ps1','PowerProfileUpdate.ps1','PowerProfileCState.ps1','USER_GUIDE.md')){if(-not $names.ContainsKey($required)){throw "更新包缺少：$required"}}
     if([version]$Version -ge [version]'1.2.0'){foreach($required in @('PowerProfileWorkspace.cs','PowerProfileWorkspace.ps1','PowerProfileWorkspaceData.ps1','PowerProfileWorkspaceCharts.cs','PowerProfileConnectionUI.ps1','PowerProfileConnectionProbe.py')){if(-not $names.ContainsKey($required)){throw "工作台更新包缺少：$required"}}}
+    if([version]$Version -ge [version]'1.6.0' -and -not $names.ContainsKey('PowerProfileSkin.cs')){throw '皮肤组件缺失。'}
     if([version]$Version -ge [version]'1.5.0'){foreach($required in @('PowerProfileAI.ps1','PowerProfileAIUsage.py')){if(-not $names.ContainsKey($required)){throw 'AI 组件缺失。'}}}
     if([version]$Version -ge [version]'1.4.0' -and -not $names.ContainsKey('PowerProfileWorkspaceAsync.ps1')){throw '缺少后台视图组件。'}
     if([version]$Version -ge [version]'1.3.0'){foreach($required in @('PowerProfileGameAnalytics.cs','PowerProfileInsights.ps1','PowerProfileInsightsUI.cs')){if(-not $names.ContainsKey($required)){throw "分析更新包缺少：$required"}}}

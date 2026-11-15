@@ -94,7 +94,7 @@ function Initialize-ModernForm {
     $Form.AutoScaleMode='Dpi';$Form.StartPosition='CenterScreen'
     $Form.FormBorderStyle='FixedDialog';$Form.MaximizeBox=$false;$Form.MinimizeBox=$false
     $Form.Icon=[ProfileVisual]::CreateIcon('Balanced')
-    $Form.Add_Shown({param($sender,$eventArgs) [ProfileVisual]::ActivateDashboard($sender.Handle)})
+    $Form.Add_Shown({param($sender,$eventArgs) if('ProfileTheme' -as [type]){[ProfileTheme]::ApplyWindow($sender)};[ProfileVisual]::ActivateDashboard($sender.Handle)})
 }
 function Invoke-TelemetrySample {
     $timedOut=$false
