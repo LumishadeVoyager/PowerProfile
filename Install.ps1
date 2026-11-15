@@ -99,19 +99,21 @@ Write-Host ""
 Write-Host "现在右下角任务栏应该有个小图标 (可能在 ^ 里面)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "图标含义:" -ForegroundColor Yellow
-Write-Host "  I (绿) = 静音模式  (1.82GHz 锁定, 防崩, 安静)" -ForegroundColor Green
-Write-Host "  B (蓝) = 均衡模式  (按需 Turbo)" -ForegroundColor Cyan
-Write-Host "  G (红) = 游戏模式  (满血 Turbo)" -ForegroundColor Red
+Write-Host "  绿色电源图标 = 静音模式；请按自己的 CPU 调整频率" -ForegroundColor Green
+Write-Host "  蓝色电源图标 = 均衡模式" -ForegroundColor Cyan
+Write-Host "  红色电源图标 = 游戏模式；实际性能受硬件与温度限制" -ForegroundColor Red
 Write-Host ""
 Write-Host "使用方法:" -ForegroundColor Yellow
-Write-Host "  - 左键单击图标 = 立刻 Auto 检测"
+Write-Host "  - 左键单击图标 = 打开运行状态"
 Write-Host "  - 右键单击图标 = 弹出菜单选模式"
 Write-Host "  - 双击图标 = 打开日志"
 Write-Host ""
 Write-Host "自动行为:" -ForegroundColor Yellow
-Write-Host "  - 每 60 秒检测一次游戏"
+Write-Host "  - 按设置的检测间隔检查游戏"
 Write-Host "  - 启动游戏自动切 Game"
 Write-Host "  - 游戏退出自动切回 Idle (前提是你之前是 Game 模式)"
 Write-Host ""
 Write-Host "如果切换不灵敏, 右键托盘选具体模式" -ForegroundColor Gray
+Write-Host "首次使用指南 / 插座接入 / 自动更新：设置 → 常用设置 → 使用指南与自动更新" -ForegroundColor Cyan
+Write-Host "完整使用手册：$(Join-Path $ScriptDir 'USER_GUIDE.md')" -ForegroundColor Cyan
 Write-Host ""
