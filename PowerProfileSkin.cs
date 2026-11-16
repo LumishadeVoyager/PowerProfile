@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -20,7 +20,9 @@ public static class ProfileSkin {
     static readonly ToolStripRenderer originalMenus=ToolStripManager.Renderer;
     static readonly ToolStripRenderer liquidMenus=new ProfileSkinMenuRenderer();
     static bool monitoring,refreshing;
-    public static void Changed(){Revision++;ToolStripManager.Renderer=Liquid?liquidMenus:originalMenus;foreach(var scene in scenes.Values){if(scene.Image!=null)scene.Image.Dispose();scene.Image=null;}}
+    static readonly Dictionary<string,Bitmap> coats=new Dictionary<string,Bitmap>();static long coatBytes;
+    public static void Changed(){Revision++;ToolStripManager.Renderer=Liquid?liquidMenus:originalMenus;foreach(var scene in scenes.Values){if(scene.Image!=null)scene.Image.Dispose();scene.Image=null;}ClearCoats();}
+    static void ClearCoats(){foreach(var bitmap in coats.Values)bitmap.Dispose();coats.Clear();coatBytes=0;}
     public static void Set(string kind){Kind=kind=="Liquid"||kind=="ClassicGlass"?kind:"Standard";Changed();}
     public static void MonitorWindows(){if(monitoring)return;monitoring=true;Application.Idle+=(s,e)=>{
         if(refreshing)return;refreshing=true;
@@ -33,7 +35,7 @@ public static class ProfileSkin {
         Scene scene;if(!scenes.TryGetValue(f,out scene)){scene=new Scene();scenes[f]=scene;Register(f);}
         var size=new Size(Math.Max(1,f.ClientSize.Width),Math.Max(1,f.ClientSize.Height));
         if(scene.Image!=null&&scene.Size==size&&scene.Revision==Revision)return scene.Image;
-        if(scene.Image!=null)scene.Image.Dispose();scene.Image=new Bitmap(size.Width,size.Height);scene.Size=size;scene.Revision=Revision;
+        if(scene.Image!=null)scene.Image.Dispose();scene.Image=new Bitmap(size.Width,size.Height,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);scene.Size=size;scene.Revision=Revision;
         using(var g=Graphics.FromImage(scene.Image)){
             var a=ProfileTheme.Dark?Color.FromArgb(15,25,45):Color.FromArgb(218,232,249);
             var b=ProfileTheme.Dark?Color.FromArgb(37,36,61):Color.FromArgb(241,234,250);
@@ -58,6 +60,21 @@ public static class ProfileSkin {
     }
     static void Coat(Graphics g,RectangleF bounds,float radius,bool selected){
         if(bounds.Width<2||bounds.Height<2)return;
+        int w=(int)Math.Ceiling(bounds.Width)+2,h=(int)Math.Ceiling(bounds.Height)+2;
+        // These are position-independent translucent layers. Scrolling only
+        // composites a cached bitmap; gradients and radial glows are not rerun.
+        string key=w+"|"+h+"|"+radius+"|"+selected+"|"+Revision;Bitmap layer;
+        if(!coats.TryGetValue(key,out layer)){
+            long bytes=(long)w*h*4;if(bytes>16*1024*1024){PaintCoat(g,bounds,radius,selected);return;}
+            if(coats.Count>=96||coatBytes+bytes>24*1024*1024)ClearCoats();
+            layer=new Bitmap(w,h,System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using(var canvas=Graphics.FromImage(layer))PaintCoat(canvas,new RectangleF(.5f,.5f,bounds.Width,bounds.Height),radius,selected);
+            coats[key]=layer;coatBytes+=bytes;
+        }
+        g.DrawImageUnscaled(layer,(int)Math.Floor(bounds.X),(int)Math.Floor(bounds.Y));
+    }
+    static void PaintCoat(Graphics g,RectangleF bounds,float radius,bool selected){
+        if(bounds.Width<2||bounds.Height<2)return;
         using(var path=ProfileMotion.Round(bounds,radius)){
             var state=g.Save();g.SetClip(path,CombineMode.Intersect);
             var top=ProfileTheme.Dark?Color.FromArgb(selected?135:105,74,106,142):Color.FromArgb(selected?210:175,255,255,255);
@@ -69,7 +86,7 @@ public static class ProfileSkin {
         }
         using(var inner=ProfileMotion.Round(new RectangleF(bounds.X+1.8f,bounds.Y+1.8f,Math.Max(1,bounds.Width-3.6f),Math.Max(1,bounds.Height-3.6f)),Math.Max(2,radius-1)))using(var pen=new Pen(ProfileTheme.Dark?Color.FromArgb(22,Color.White):Color.FromArgb(22,51,92,143)))g.DrawPath(pen,inner);
     }
-    public static void Plot(Control c,Graphics g){if(Liquid){Canvas(c,g);Glass(c,g,new RectangleF(.5f,.5f,c.Width-1,c.Height-1),16,false);}else g.Clear(c.BackColor);}
+    public static void Plot(Control c,Graphics g){if(Liquid){Glass(c,g,new RectangleF(.5f,.5f,c.Width-1,c.Height-1),16,false);}else g.Clear(c.BackColor);}
     static void PanelPaint(object sender,PaintEventArgs e){if(Liquid)Canvas((Control)sender,e.Graphics);}
     static void ButtonPaint(object sender,PaintEventArgs e){if(!Liquid)return;var b=(Button)sender;Canvas(b,e.Graphics);Glass(b,e.Graphics,new RectangleF(.5f,.5f,b.Width-1,b.Height-1),Math.Min(18,b.Height/2),b.Focused);TextRenderer.DrawText(e.Graphics,b.Text,b.Font,b.ClientRectangle,b.Enabled?ProfileTheme.Text:ProfileTheme.Muted,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);if(b.Focused)ControlPaint.DrawFocusRectangle(e.Graphics,Rectangle.Inflate(b.ClientRectangle,-5,-5));}
     static void CellPaint(object sender,DataGridViewCellPaintingEventArgs e){
@@ -80,7 +97,7 @@ public static class ProfileSkin {
     }
     public static void Wire(Control c){
         if(!wired.Add(c))return;c.Disposed+=(s,e)=>{wired.Remove(c);native.Remove(c);};
-        if(c is Form){Register((Form)c);c.Paint+=PanelPaint;}else if(c is Panel&&!(c is ProfileSurface)&&!(c is ProfileNavigation))c.Paint+=PanelPaint;
+        if(c is Form){Register((Form)c);if(!(c is ProfileWorkspaceForm))c.Paint+=PanelPaint;}else if(c is Panel&&!(c is ProfileSurface)&&!(c is ProfileNavigation)&&!(c is ProfileSkinPanel))c.Paint+=PanelPaint;
         var group=c as GroupBox;if(group!=null)group.Paint+=(s,e)=>{if(!Liquid)return;Canvas(group,e.Graphics);Glass(group,e.Graphics,new RectangleF(.5f,8.5f,group.Width-1,group.Height-9),16,false);TextRenderer.DrawText(e.Graphics,group.Text,group.Font,new Rectangle(14,0,Math.Max(1,group.Width-28),group.Font.Height+3),group.ForeColor,TextFormatFlags.EndEllipsis);};
         var b=c as Button;if(b!=null&&!(b is ProfileActionButton))b.Paint+=ButtonPaint;
         var grid=c as DataGridView;if(grid!=null)grid.CellPainting+=CellPaint;
@@ -107,7 +124,21 @@ public static class ProfileSkin {
     }
 }
 public sealed class ProfileSkinPanel : Panel {
-    public ProfileSkinPanel(){DoubleBuffered=true;}
+    readonly Timer scrollTimer=new Timer{Interval=15};double scrollTarget;bool stepping;
+    public bool ScrollAnimating {get{return scrollTimer.Enabled;}}
+    public ProfileSkinPanel(){DoubleBuffered=true;scrollTimer.Tick+=(s,e)=>{
+        if(!Visible||!ProfileMotion.Allowed){scrollTimer.Stop();return;}int current=-AutoScrollPosition.Y,max=Math.Max(0,VerticalScroll.Maximum-VerticalScroll.LargeChange+1);scrollTarget=Math.Max(0,Math.Min(max,scrollTarget));double distance=scrollTarget-current;int next=Math.Abs(distance)<2?(int)scrollTarget:current+(int)(Math.Sign(distance)*Math.Max(1,Math.Ceiling(Math.Abs(distance)*.45)));
+        stepping=true;try{AutoScrollPosition=new Point(-AutoScrollPosition.X,next);}finally{stepping=false;}if(next==(int)scrollTarget||next==current)scrollTimer.Stop();
+    };}
+    protected override void OnMouseWheel(MouseEventArgs e){
+        if(!AutoScroll||!VerticalScroll.Visible||!ProfileMotion.Allowed||SystemInformation.MouseWheelScrollLines==0){base.OnMouseWheel(e);return;}
+        if(!scrollTimer.Enabled)scrollTarget=-AutoScrollPosition.Y;int lines=SystemInformation.MouseWheelScrollLines;double step=lines<0?ClientSize.Height:Math.Max(1,lines)*Font.Height;
+        scrollTarget=Math.Max(0,Math.Min(Math.Max(0,VerticalScroll.Maximum-VerticalScroll.LargeChange+1),scrollTarget-e.Delta/120.0*step));scrollTimer.Start();var handled=e as HandledMouseEventArgs;if(handled!=null)handled.Handled=true;
+    }
+    protected override void OnScroll(ScrollEventArgs e){if(!stepping)scrollTimer.Stop();base.OnScroll(e);}
+    protected override void OnMouseDown(MouseEventArgs e){scrollTimer.Stop();base.OnMouseDown(e);}
+    protected override void OnVisibleChanged(EventArgs e){if(!Visible)scrollTimer.Stop();base.OnVisibleChanged(e);}
+    protected override void Dispose(bool disposing){if(disposing)scrollTimer.Dispose();base.Dispose(disposing);}
     protected override void OnPaintBackground(PaintEventArgs e){if(ProfileSkin.Liquid)ProfileSkin.Canvas(this,e.Graphics);else base.OnPaintBackground(e);}
 }
 public sealed class ProfileSkinMenuRenderer : ToolStripProfessionalRenderer {

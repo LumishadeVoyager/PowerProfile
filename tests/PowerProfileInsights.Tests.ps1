@@ -29,6 +29,8 @@ try{
     $points.Add((NewGamePoint $at Game 'NBA 2K26' $true));$points.Add((NewGamePoint $at Game 'NBA 2K26' $true));$points.Add((NewGamePoint $at.AddHours(2) Idle $null $false))
     $sessions=[ProfileGameSessionStore]::Build($points,$power,$at.AddHours(2))
     Assert 'duplicate mode logs rebuild one named two-hour session' ($sessions.Count -eq 1 -and $sessions[0].Seconds -eq 7200 -and $sessions[0].Estimated)
+    $copy=$sessions[0].Copy();$powerCopy=New-Object ProfileGamePowerRange;$powerCopy.Start=$at;$powerCopy.End=$at.AddMinutes(1);$powerCopy.KWh=0.001;$copy.Power.Add($powerCopy)
+    Assert 'presentation snapshot power collections are isolated from live accounting' ($sessions[0].Power.Count -eq 0 -and $copy.Power.Count -eq 1)
     $store=New-Object ProfileGameSessionStore $root;$store.Refresh($points,$power,$at.AddHours(2))
     $down=New-Object ProfileUsagePowerEvent;$down.Time=$at.AddMinutes(30);$power.Add($down);$up=New-Object ProfileUsagePowerEvent;$up.Time=$at.AddMinutes(90);$up.Awake=$true;$power.Add($up)
     $store.Refresh($points,$power,$at.AddHours(2));$store.Refresh($points,$power,$at.AddHours(2))

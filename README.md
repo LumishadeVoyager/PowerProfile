@@ -2,11 +2,11 @@
 
 Windows PowerShell 5.1 托盘工具。可放在任意本地目录；本机部署在 `E:\PowerProfile\`。
 
-v1.7.0 将游戏记录改为 Steam 封面卡片，设备页采用带独立开关与定时入口的中枢卡片。全局液态玻璃统一七页及应用弹窗，设置中可即时切回标准或经典毛玻璃皮肤。保留独立明暗 / 字号设置和 3:4 纵向窗口，以及 AI 历史与费用看板、游戏分析、米家设备和定时任务。详见 [工作台手册](WORKSPACE.md)、[AI 使用手册](AI_USAGE.md)。
+v1.8.0 优化工作台底层绘制与数据刷新：缓存玻璃材质和游戏卡片、后台整理游戏数据、虚拟化表格，并加入按需平滑滚动。保留 Steam 封面和双列设备卡片。全局液态玻璃统一七页及应用弹窗，设置中可即时切回标准或经典毛玻璃皮肤。保留独立明暗 / 字号设置和 3:4 纵向窗口，以及 AI 历史与费用看板、游戏分析、米家设备和定时任务。详见 [工作台手册](WORKSPACE.md)、[AI 使用手册](AI_USAGE.md)。
 
 ## 下载与首次使用
 
-从 [GitHub Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载正式 Windows ZIP，完整解压后用管理员 Windows PowerShell 运行 `Install.ps1`。新用户请先阅读 [使用手册](USER_GUIDE.md)；[v1.7.0 发布说明](RELEASE_NOTES_1.7.0.md) 包含本次功能与限制。首次运行有指南，无需米家插座也可使用电源档位。
+从 [GitHub Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载正式 Windows ZIP，完整解压后用管理员 Windows PowerShell 运行 `Install.ps1`。新用户请先阅读 [使用手册](USER_GUIDE.md)；[v1.8.0 发布说明](RELEASE_NOTES_1.8.0.md) 包含本次功能与限制。首次运行有指南，无需米家插座也可使用电源档位。
 
 正式分发版默认每 24 小时自动检查并下载稳定版，校验后下次启动托盘安装；源码 / Git 目录不被 OTA 覆盖。更新保留个人配置、授权、设备任务和历史。设置中的“使用指南与自动更新”可查看状态或关闭自动检查。私有仓库需授权访问，私有 OTA 另需 GitHub CLI 登录。
 

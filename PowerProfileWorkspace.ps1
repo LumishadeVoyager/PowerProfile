@@ -115,14 +115,28 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
         }
     }catch{$w.Footer.Text='! '+$_.Exception.GetBaseException().Message;Write-ProfileEvent 'workspace.action.failed' $_.Exception.GetBaseException().Message 'WARN' @{action=$Action}}
 }
+function Update-WorkspacePending($hub){$w=$Script:Workspace;$t=$w.Tag;
+    if($t.PendingRequest){$operation=@($hub.Status.operations|Where-Object {$_.id -eq $t.PendingRequest})[0];if($operation){$w.Footer.Text=@{sending='◷ 正在发送';checking='◷ 等待实际状态读回';confirmed='✓ 已完成并读回';failed='! 操作失败'}[$operation.phase]+' · '+$operation.message;if($operation.phase -in @('confirmed','failed')){$t.PendingRequest=$null;$t.PendingDevice=$null;$t.DeviceKey=''}}elseif($t.PendingSince -and ([DateTime]::UtcNow-$t.PendingSince).TotalSeconds -gt 120){$w.Footer.Text='! 请求已超时，未确认执行；请检查连接和设备实际状态后再试。';$t.PendingRequest=$null;$t.PendingDevice=$null;$t.DeviceKey=''}}
+}
 function Update-ProfileWorkspace {
     param($State=$null)
     $w=$Script:Workspace;if(-not $w -or $w.IsDisposed){return};$t=$w.Tag
+    if($t.PendingRequest){Update-WorkspacePending (Get-WorkspaceHub)}
+    if($w.ActivePage -eq 'AI'){Update-WorkspaceAI;return}
+    if($w.ActivePage -eq 'Settings'){return}
+    if($w.ActivePage -eq 'Games'){if($null -eq $State){$State=$Script:EnergyService.GetSnapshot()};$t.State=$State;Update-WorkspaceGames $State;return}
     $t.Chart.DarkMode=[ProfileTheme]::Dark;$t.Chart.BackColor=[ProfileTheme]::Surface;$t.Chart.ForeColor=[ProfileTheme]::Text
     if($null -eq $State){$State=$Script:EnergyService.GetSnapshot()};$t.State=$State
+    if($w.ActivePage -eq 'Energy'){
+    $view=@('Day','Week','Month')[$w.Group.SelectedIndex];$count=if($view -eq 'Day'){@(7,30,90)[$w.Range.SelectedIndex]}elseif($view -eq 'Week'){@(4,8,12)[$w.Range.SelectedIndex]}else{@(3,6,12)[$w.Range.SelectedIndex]}
+    $energyKey="$($State.ObservedAt.Ticks)|$($State.UsageUpdatedAt.Ticks)|$($State.Price)|$view|$count|$($State.Days.Count)|$($State.MonthKWh)"
+    if($w.ActivePage -eq 'Energy' -and $t.EnergyKey -ne $energyKey){$t.EnergyKey=$energyKey;Update-WorkspaceInsights $State $view $count}
+        Update-WorkspaceAI;return
+    }
     $now=[TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time'))
     $hub=Get-WorkspaceHub;$t.Hub=$hub;$monday=$now.Date.AddDays(-(([int]$now.DayOfWeek+6)%7));$week=$monday.AddDays(7*$w.WeekOffset)
     $future=Get-WorkspaceSchedule $hub.Config $hub.Status.rules $now.Date $now
+    if($w.ActivePage -eq 'Overview'){
     $mode=if(Get-Command Get-CurrentMode -ErrorAction SilentlyContinue){Get-CurrentMode}else{'Idle'}
     $modeName=if($Script:Settings -and $Script:Settings.modes -and $Script:Settings.modes[$mode]){$Script:Settings.modes[$mode].name}else{@{Idle='静音';Balanced='均衡';Game='游戏'}[$mode]}
     $w.Metrics['mode'].Set($modeName,$(if(Get-Command Get-AutoEnabled -ErrorAction SilentlyContinue){if(Get-AutoEnabled){'自动切换已开启'}else{'手动档位优先'}}else{'等待托盘状态'}))
@@ -138,10 +152,7 @@ function Update-ProfileWorkspace {
     $w.OverviewReason.Text=if($reason.Fresh){'档位原因：'+$reason.Reason}else{'档位原因：等待新的游戏识别记录；原控制逻辑继续运行。'}
     $tray=Read-WorkspaceJson (Join-Path (Get-WorkspaceRoot) 'tray_ready.json');$trayAlive=$tray.processId -and [bool](Get-Process -Id $tray.processId -ErrorAction SilentlyContinue)
     $w.Runtime.Text="托盘：$(if($trayAlive){'运行中'}else{'未确认运行'}) · 自动化中枢：$(if(-not $hub.Config.enabled){'已暂停'}elseif($hub.Fresh){'运行中'}else{'响应过期 / 未连接'})`r`n插座：$(Get-EnergyStatusText $State) · $(if($State.ObservedAt -ne [DateTime]::MinValue){'最近读回 '+$State.ObservedAt.ToLocalTime().ToString('HH:mm:ss')}else{'尚无实际读回'})`r`n关闭工作台仅隐藏窗口；托盘与已启用的中枢仍继续工作。"
-    $view=@('Day','Week','Month')[$w.Group.SelectedIndex];$count=if($view -eq 'Day'){@(7,30,90)[$w.Range.SelectedIndex]}elseif($view -eq 'Week'){@(4,8,12)[$w.Range.SelectedIndex]}else{@(3,6,12)[$w.Range.SelectedIndex]}
-    $energyKey="$($State.ObservedAt.Ticks)|$($State.UsageUpdatedAt.Ticks)|$($State.Price)|$view|$count|$($State.Days.Count)|$($State.MonthKWh)"
-    if($w.ActivePage -eq 'Energy' -and $t.EnergyKey -ne $energyKey){$t.EnergyKey=$energyKey;Update-WorkspaceInsights $State $view $count}
-    if($w.ActivePage -eq 'Games'){$gameKey="$($State.UsageUpdatedAt.Ticks)|$($State.LocalDay)|$($State.UsageDays.Count)";if($t.GameKey -ne $gameKey){$t.GameKey=$gameKey;Update-WorkspaceGames $State}}
+    }
     if($w.ActivePage -eq 'Devices'){
         $prefs=Get-WorkspacePreferences;$groups=@('全部分组')+@($hub.Status.devices|ForEach-Object {$p=$prefs.devices.($_.did);if($p.room){$p.room}else{'未分组'}}|Sort-Object -Unique)
         if(($groups -join '|') -ne (@($w.Room.Items) -join '|')){$selected=$w.Room.SelectedItem;$t.Suppress=$true;$w.Room.Items.Clear();foreach($g in $groups){[void]$w.Room.Items.Add($g)};$w.Room.SelectedItem=if($groups -contains $selected){$selected}else{'全部分组'};$t.Suppress=$false}
@@ -164,13 +175,13 @@ function Update-ProfileWorkspace {
         }
     }
     Update-WorkspaceAI
-    if($t.PendingRequest){$operation=@($hub.Status.operations|Where-Object {$_.id -eq $t.PendingRequest})[0];if($operation){$w.Footer.Text=@{sending='◷ 正在发送';checking='◷ 等待实际状态读回';confirmed='✓ 已完成并读回';failed='! 操作失败'}[$operation.phase]+' · '+$operation.message;if($operation.phase -in @('confirmed','failed')){$t.PendingRequest=$null;$t.PendingDevice=$null;$t.DeviceKey=''}}elseif($t.PendingSince -and ([DateTime]::UtcNow-$t.PendingSince).TotalSeconds -gt 120){$w.Footer.Text='! 请求已超时，未确认执行；请检查连接和设备实际状态后再试。';$t.PendingRequest=$null;$t.PendingDevice=$null;$t.DeviceKey=''}}
+
 }
 function Show-ProfileWorkspace {
     param([string]$Page='Overview',[switch]$ReturnForm)
     if($Script:Workspace -and -not $Script:Workspace.IsDisposed){$Script:Workspace.Show();$Script:Workspace.Navigate($Page);[ProfileVisual]::ActivateDashboard($Script:Workspace.Handle);if($ReturnForm){return $Script:Workspace};return}
     Initialize-EnergyService
-    $prefs=Get-WorkspacePreferences;[ProfileSkin]::Set($prefs.skin);$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w;$w.ConfigureArtwork((Join-Path (Get-WorkspaceRoot) '.codex\game-covers'),([IO.Path]::GetFullPath((Get-WorkspaceRoot)).TrimEnd('\') -eq [IO.Path]::GetFullPath($ScriptDir).TrimEnd('\')))
+    $prefs=Get-WorkspacePreferences;[ProfileSkin]::Set($prefs.skin);$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$w.DeferPageEvents=(-not $ReturnForm);$Script:Workspace=$w;$w.ConfigureArtwork((Join-Path (Get-WorkspaceRoot) '.codex\game-covers'),([IO.Path]::GetFullPath((Get-WorkspaceRoot)).TrimEnd('\') -eq [IO.Path]::GetFullPath($ScriptDir).TrimEnd('\')))
     $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart)
     $aiChart=New-Object ProfileInteractiveTimeline;$aiChart.Dock='Fill';$aiChart.AIOnly=$true;$w.AIChartHost.Controls.Add($aiChart)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=2000
@@ -178,6 +189,7 @@ function Show-ProfileWorkspace {
     $tModel=New-Object Windows.Forms.Timer;$tModel.Interval=30;$w.Tag.ModelTimer=$tModel;$tModel.Add_Tick({Complete-WorkspaceModels})
     $prefs=Get-WorkspacePreferences;$w.AISource.SelectedIndex=$prefs.aiSource;$w.AICurrency.SelectedItem=$prefs.aiCurrency;$mode=[array]::IndexOf(@('System','Light','Dark'),$prefs.theme);$w.Theme.SelectedIndex=$mode;$w.SetTheme($mode)
     foreach($key in $w.MetricOptions.Keys){$visible=$prefs.metrics -contains $key;$w.MetricOptions[$key].Checked=$visible;$w.SetMetricVisible($key,$visible)}
+    $w.Add_Shown({param($sender,$eventArgs) if($sender.Tag.DeferModels -and $sender.ActivePage -eq 'Overview'){Start-WorkspaceModels -Page 'Games'}})
     $w.add_Command({param($sender,$eventArgs) if(-not $sender.Tag.Suppress){Invoke-WorkspaceCommand $eventArgs.Action $eventArgs.Id}})
     $chart.add_PeriodSelected({param($sender,$eventArgs) Invoke-WorkspaceCommand 'ChartSelection' $eventArgs.Key})
     $timer.Add_Tick({if($Script:Workspace -and $Script:Workspace.Visible){try{if($Script:Workspace.Tag.DeferModels -and $Script:Workspace.ActivePage -in @('Energy','Games')){Start-WorkspaceModels;Update-WorkspaceAI}else{Update-ProfileWorkspace}}catch{$Script:Workspace.Footer.Text='! 状态暂不可读，保留现有显示；下轮自动重试';Write-ProfileEvent 'workspace.refresh.failed' $_.Exception.Message 'WARN'}}})

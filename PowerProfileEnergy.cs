@@ -181,7 +181,7 @@ public sealed class ProfileEnergyService : IDisposable {
         r.UsageDays=Summarize(history,config.Price,DateTime.UtcNow).UsageDays;
         if(usageCache!=null){ProfileUsageLogReader.Merge(r.UsageDays,usageCache);r.UsageUpdatedAt=usageCache.UpdatedAt;}
         r.Configured=snapshot.Configured;r.Busy=busy;r.On=snapshot.On;r.Watts=snapshot.Watts;r.ObservedAt=snapshot.ObservedAt;r.Status=snapshot.Status;r.Points=new List<ProfileEnergyPoint>(history.Points);r.GameSessions=new List<ProfileGameSession>(gameSessions);
-        return r;}}
+        r.GameSessions=r.GameSessions.Select(s=>s.Copy()).ToList();return r;}}
     static void ValidateCloud(ProfileCloudHistory value){
         if(value==null || value.DeviceId==0 || value.Model!="cuco.plug.v3" || value.Days==null || value.Days.Count==0 || value.Days.Count>400)throw new InvalidDataException("历史设备或日期数量无效。");
         foreach(var item in value.Days){DateTime date;var day=item.Value;

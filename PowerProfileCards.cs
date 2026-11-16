@@ -101,15 +101,23 @@ public sealed class ProfileSteamArtwork {
 
 public sealed class ProfileGameCard : ProfileSurface {
     public ProfileGameView View;public bool Selected;public string AppId;public ProfileSteamArtwork Artwork;
-    Bitmap cover;bool requested;readonly ProfileHoverTip tip;
+    Bitmap cover,raster;bool requested;readonly ProfileHoverTip tip;int contentVersion,rasterVersion=-1,rasterSkin=-1;Size rasterSize;Font rasterFont;bool rasterSelected,rasterFocused;
     public ProfileGameCard(){SetStyle(ControlStyles.Selectable,true);Height=224;Padding=Padding.Empty;TabStop=true;Cursor=Cursors.Hand;AccessibleRole=AccessibleRole.PushButton;tip=new ProfileHoverTip(this);}
-    public void Update(ProfileGameView view){View=view;AccessibleName=view.Name;AccessibleDescription=view.Duration+" · "+view.Sessions+" 个片段；按 Enter 查看会话";tip.Update(view.Detail);Invalidate();}
+    public void Update(ProfileGameView view){if(View!=null&&View.Name==view.Name&&View.Duration==view.Duration&&View.Recent==view.Recent&&View.Detail==view.Detail&&View.Sessions==view.Sessions)return;contentVersion++;View=view;AccessibleName=view.Name;AccessibleDescription=view.Duration+" · "+view.Sessions+" 个片段；按 Enter 查看会话";tip.Update(view.Detail);Invalidate();}
     protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);RequestCover();}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);RequestCover();}
-    void RequestCover(){if(requested||!Visible||Artwork==null||View==null||!IsHandleCreated)return;requested=true;Artwork.Request(View.Name,this,(image,id)=>{cover=image;AppId=id;Invalidate();});}
+    void RequestCover(){if(requested||!Visible||Artwork==null||View==null||!IsHandleCreated)return;requested=true;Artwork.Request(View.Name,this,(image,id)=>{cover=image;AppId=id;contentVersion++;Invalidate();});}
     protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){OnClick(EventArgs.Empty);e.Handled=true;}}
-    protected override void OnPaint(PaintEventArgs e){
-        base.OnPaint(e);if(View==null)return;RequestCover();var g=e.Graphics;float f=Font.Size/9f;int pad=(int)(12*f),top=(int)(108*f);g.SmoothingMode=SmoothingMode.AntiAlias;
+    protected override void OnPaintBackground(PaintEventArgs e){
+        RequestCover();if(raster==null||rasterSize!=Size||rasterVersion!=contentVersion||rasterSkin!=ProfileSkin.Revision||rasterFont!=Font||rasterSelected!=Selected||rasterFocused!=Focused){
+            if(raster!=null)raster.Dispose();rasterSize=Size;rasterVersion=contentVersion;rasterSkin=ProfileSkin.Revision;rasterFont=Font;rasterSelected=Selected;rasterFocused=Focused;
+            raster=new Bitmap(Math.Max(1,Width),Math.Max(1,Height),System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using(var g=Graphics.FromImage(raster)){var paint=new PaintEventArgs(g,new Rectangle(Point.Empty,Size));base.OnPaintBackground(paint);PaintContents(paint);}
+        }e.Graphics.DrawImageUnscaled(raster,0,0);
+    }
+    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);}
+    void PaintContents(PaintEventArgs e){
+        if(View==null)return;RequestCover();var g=e.Graphics;float f=Font.Size/9f;int pad=(int)(12*f),top=(int)(108*f);g.SmoothingMode=SmoothingMode.AntiAlias;
         using(var clip=ProfileMotion.Round(new RectangleF(1,1,Width-2,Height-2),16)){
             var saved=g.Save();g.SetClip(clip);
             if(cover!=null){float ratio=Math.Max(Width/(float)cover.Width,top/(float)cover.Height);float width=cover.Width*ratio,height=cover.Height*ratio;g.DrawImage(cover,(Width-width)/2,(top-height)/2,width,height);}
@@ -122,7 +130,7 @@ public sealed class ProfileGameCard : ProfileSurface {
         if(Selected||Focused){using(var path=ProfileMotion.Round(new RectangleF(1,1,Width-3,Height-3),16))using(var pen=new Pen(ProfileTheme.Accent,2))g.DrawPath(pen,path);}
         if(Focused&&ShowFocusCues)ControlPaint.DrawFocusRectangle(g,new Rectangle(5,5,Width-10,Height-10));
     }
-    protected override void Dispose(bool disposing){if(disposing){tip.Dispose();if(cover!=null)cover.Dispose();}base.Dispose(disposing);}
+    protected override void Dispose(bool disposing){if(disposing){tip.Dispose();if(cover!=null)cover.Dispose();if(raster!=null)raster.Dispose();}base.Dispose(disposing);}
 }
 
 public sealed class ProfilePowerToggle : Button {

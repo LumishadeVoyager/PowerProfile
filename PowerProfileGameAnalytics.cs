@@ -11,6 +11,7 @@ public sealed class ProfileGamePowerRange {public DateTime Start,End;public doub
 public sealed class ProfileGameSession {
     public string Id,Name,Source;public DateTime Start,End;public bool Estimated,Open;
     public List<ProfileGamePowerRange> Power=new List<ProfileGamePowerRange>();
+    public ProfileGameSession Copy(){var result=(ProfileGameSession)MemberwiseClone();result.Power=Power.Select(p=>new ProfileGamePowerRange{Start=p.Start,End=p.End,KWh=p.KWh}).ToList();return result;}
     public double Seconds {get{return (End-Start).TotalSeconds;}}
     public double SampledSeconds {get{return Power.Sum(p=>(p.End-p.Start).TotalSeconds);}}
     public double? SampledKWh {get{return Power.Count>0?(double?)Power.Sum(p=>p.KWh):null;}}

@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Windows.Forms;
 
 public sealed class ProfileEnergyPeriod {
+    public ProfileEnergyPeriod Copy(){return (ProfileEnergyPeriod)MemberwiseClone();}
     public double? CodexTokens {get;set;}public double? ClaudeTokens {get;set;}public double? CodexCost {get;set;}public double? ClaudeCost {get;set;}public bool CodexCostPartial {get;set;}public bool ClaudeCostPartial {get;set;}
     public string Key {get;set;}
     public string Label {get;set;}

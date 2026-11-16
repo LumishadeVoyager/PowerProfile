@@ -1,6 +1,6 @@
 ﻿# PowerProfile 使用手册
 
-适用于 v1.7.0。PowerProfile 是 Windows 托盘电源管理工具；米家插座、云端历史、设备中枢和 AI 用量均为可选功能。无需插座即可使用电源档位与游戏识别。
+适用于 v1.8.0。PowerProfile 是 Windows 托盘电源管理工具；米家插座、云端历史、设备中枢和 AI 用量均为可选功能。无需插座即可使用电源档位与游戏识别。
 
 左键托盘打开 3:4 纵向工作台，顶部为“总览 / 趋势 / AI / 游戏 / 设备 / 任务 / 设置”。带“＋”的区域按需展开；设置 → 外观可切换“液态玻璃 / 标准 / 经典毛玻璃”，并独立调整明暗主题、字号和动画。液态皮肤覆盖正文和应用弹窗；标准皮肤随时可恢复。用电的筛选 / 显示列在折叠区，电价与导出在“更多”。连接入口在总览或趋势页。
 
@@ -12,7 +12,7 @@ AI 页自动导入本机可读取的 Codex、Claude Code、CC Switch 历史，�
 
 ## 1. 下载与安装
 
-1. 从 [GitHub 最新 Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载 **PowerProfile-1.7.0-windows.zip**，不要把源码压缩包当作安装包。
+1. 从 [GitHub 最新 Release](https://github.com/LumishadeVoyager/PowerProfile/releases/latest) 下载 **PowerProfile-1.8.0-windows.zip**，不要把源码压缩包当作安装包。
 2. 完整解压到自己的本地固定目录，例如 `C:\Tools\PowerProfile`。不要直接在 ZIP 中运行，也不要放在临时目录、只读目录或多人共用的可写目录。
 3. Windows 10 / 11、Windows PowerShell 5.1、.NET Framework 4.8；安装和电源管理需要管理员权限。主要在 Intel 混合架构笔记本验证，其他 CPU / 固件可能不支持全部电源参数，请先验证。
 4. 打开管理员 Windows PowerShell，进入解压目录，执行：

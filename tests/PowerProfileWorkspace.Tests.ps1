@@ -162,6 +162,19 @@ try{
     Assert 'finished background work never navigates away from the chosen page' ($w.ActivePage -eq 'Overview' -and -not $w.Tag.ModelJob)
     Assert 'navigation and visual settings never enqueue physical operations' (-not(Test-Path (Join-Path $hubDir 'queue')))
     Assert 'fixture workspaces never launch the real personal AI collector' (-not (Test-Path (Join-Path $root 'ai.usage.db')))
+    $w.Tag.ModelSignature='';$w.GameRange.SelectedIndex=3;$w.Navigate('Games');$deadline.Restart();while($w.Tag.ModelJob -and $deadline.ElapsedMilliseconds -lt 10000){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(10)}
+    Assert 'game aggregation arrives from background worker and binds virtual rows' ($w.Tag.ModelReady['Games'] -and $null -ne $w.Tag.GameModel -and $w.GameSessions.VirtualMode -and $w.GameTotals.VirtualMode)
+    $nav=New-Object ProfileWorkspaceForm;$nav.DeferPageEvents=$true;$Script:pageEvents=New-Object 'Collections.Generic.List[string]';$nav.add_Command({param($sender,$eventArgs) if($eventArgs.Action -eq 'Page'){$Script:pageEvents.Add($eventArgs.Id)}});$nav.Show();$nav.Navigate('Devices');$nav.Navigate('Games');$nav.Navigate('Settings')
+    Assert 'production navigation does not run data callbacks inside the click' ($Script:pageEvents.Count -eq 0)
+    $deadline.Restart();while($deadline.ElapsedMilliseconds -lt 80){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(5)}
+    Assert 'rapid page changes coalesce into the last visible page refresh' ($Script:pageEvents.Count -eq 1 -and $Script:pageEvents[0] -eq 'Settings');$nav.Dispose()
+    $pendingStatus=Read-WorkspaceJson (Join-Path $hubDir 'status.json');$pendingStatus.operations=@(@{id='fixture-pending';phase='confirmed';message='fixture readback'});Write-AtomicJson (Join-Path $hubDir 'status.json') $pendingStatus
+    $w.Tag.PendingRequest='fixture-pending';$w.Tag.PendingDevice='lamp';$w.Navigate('AI');Update-ProfileWorkspace
+    Assert 'device completion is still observed while viewing another page' (-not $w.Tag.PendingRequest -and $w.Footer.Text -match 'fixture readback')
+    $scrollForm=New-Object Windows.Forms.Form;$scrollForm.ClientSize=New-Object Drawing.Size 240,240;$scrollPage=New-Object ProfileSkinPanel;$scrollPage.Dock='Fill';$scrollPage.AutoScroll=$true;$spacer=New-Object Windows.Forms.Panel;$spacer.Size=New-Object Drawing.Size 100,1400;$scrollPage.Controls.Add($spacer);$scrollForm.Controls.Add($scrollPage);$scrollForm.Show();[Windows.Forms.Application]::DoEvents()
+    [ProfileMotion]::Enabled=$true;$wheel=New-Object Windows.Forms.MouseEventArgs None,0,50,50,-120;[void]$scrollPage.GetType().GetMethod('OnMouseWheel',[Reflection.BindingFlags]'Instance,NonPublic').Invoke($scrollPage,[object[]]@($wheel.PSObject.BaseObject))
+    if([ProfileMotion]::Allowed -and [Windows.Forms.SystemInformation]::MouseWheelScrollLines -ne 0){Assert 'wheel scrolling animates only while input is settling' $scrollPage.ScrollAnimating;$deadline.Restart();while($deadline.ElapsedMilliseconds -lt 400){[Windows.Forms.Application]::DoEvents();[Threading.Thread]::Sleep(5)};Assert 'smooth scrolling reaches its target and stops the timer' (-not $scrollPage.ScrollAnimating -and $scrollPage.AutoScrollPosition.Y -lt 0)}
+    $scrollPage.Hide();Assert 'hidden pages never keep the scroll timer running' (-not $scrollPage.ScrollAnimating);$scrollForm.Dispose()
     $w.Dispose()
 }finally{
     if($Script:Workspace){$Script:Workspace.Dispose()};if($Script:EnergyService){$Script:EnergyService.Dispose()};if($Script:EnergyLogTimer){$Script:EnergyLogTimer.Dispose()};if($Script:DeviceHubTick){$Script:DeviceHubTick.Dispose()}

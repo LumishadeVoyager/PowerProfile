@@ -23,11 +23,12 @@ function Format-AITimestamp($Value){if(-not $Value){return '尚未启用'};try{$
 function Format-AICompactTokens([double]$Value){if($Value -ge 100000000){return ('{0:0.00} 亿' -f ($Value/100000000))};if($Value -ge 10000){return ('{0:0.00} 万' -f ($Value/10000))};return ('{0:N0}' -f $Value)}
 function Format-AICompactMoney([double]$Value){if($Value -gt 0 -and $Value -lt 0.01){return ('{0:0.######}' -f $Value)};return ('{0:N2}' -f $Value)}
 function Update-WorkspaceAI {
-    $w=$Script:Workspace;if(-not $w -or -not $w.Tag){return};$snapshot=Read-AISnapshot;$t=$w.Tag;$t.AISnapshot=$snapshot;if($t.AIChart){$t.AIChart.DarkMode=[ProfileTheme]::Dark;$t.AIChart.BackColor=[ProfileTheme]::Surface;$t.AIChart.ForeColor=[ProfileTheme]::Text}
-    $source=@('native','cc-switch','combined')[[Math]::Max(0,$w.AISource.SelectedIndex)];$rows=Get-AIRows $snapshot $source ([string]$w.AIClient.SelectedItem) $w.AISearch.Text.Trim()
+    $w=$Script:Workspace;if(-not $w -or -not $w.Tag -or $w.ActivePage -notin @('AI','Energy')){return};$snapshot=Read-AISnapshot;$t=$w.Tag;$t.AISnapshot=$snapshot;if($t.AIChart){$t.AIChart.DarkMode=[ProfileTheme]::Dark;$t.AIChart.BackColor=[ProfileTheme]::Surface;$t.AIChart.ForeColor=[ProfileTheme]::Text}
+    $source=@('native','cc-switch','combined')[[Math]::Max(0,$w.AISource.SelectedIndex)]
     if($w.ActivePage -eq 'AI'){
         $localDay=[TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')).ToString('yyyy-MM-dd');$key="$localDay|$($snapshot.revision)|$source|$($w.AIClient.SelectedIndex)|$($w.AISearch.Text)|$($w.AIRange.SelectedIndex)|$($w.AIView.SelectedIndex)|$($w.AICurrency.SelectedIndex)|$($t.AIChargeRevision)"
         if($t.AIKey -ne $key){
+            $rows=Get-AIRows $snapshot $source ([string]$w.AIClient.SelectedItem) $w.AISearch.Text.Trim()
             $t.AIKey=$key;$today=[TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow,[TimeZoneInfo]::FindSystemTimeZoneById('China Standard Time')).Date
             $allTime=$w.AIRange.SelectedIndex -eq 4;$days=if($allTime){$first=@((Get-AIRows $snapshot $source ([string]$w.AIClient.SelectedItem))|Sort-Object date|Select-Object -First 1);if($first.Count){[Math]::Max(1,($today-([DateTime]$first[0].date)).Days+1)}else{1}}else{@(7,30,90,400)[$w.AIRange.SelectedIndex]};$from=$today.AddDays(1-$days);$periodName=if($allTime){(Format-EnergyCalendarDate $from)+' 至今'}else{'近 {0} 天' -f $days}
             $lifetime=@(Get-AIRows $snapshot $source ([string]$w.AIClient.SelectedItem));$lifetimeTokens=($lifetime|Measure-Object tokens -Sum).Sum;$lifetimePriced=($lifetime|Measure-Object pricedTokens -Sum).Sum;$lifetimeCosts=@($lifetime|Where-Object {$null -ne $_.cost}|Group-Object currency|ForEach-Object {$_.Name+' '+('{0:N4}' -f ($_.Group|Measure-Object cost -Sum).Sum)});$rows=@($rows|Where-Object {[DateTime]$_.date -ge $from -and [DateTime]$_.date -le $today});$grid=[ProfileBufferedGrid]$w.AIGrid;$grid.BeginBatch()
