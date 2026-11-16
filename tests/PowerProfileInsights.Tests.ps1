@@ -95,7 +95,7 @@ try{
     $header=[ProfileSteamArtwork]::HeaderUrl('{"header_image":"https:\/\/shared.akamai.steamstatic.com\/store_item_assets\/steam\/apps\/12345\/hash\/header_schinese.jpg"}','12345');Assert 'hashed localized Steam covers resolve from public app metadata' ($header -eq 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/12345/hash/header_schinese.jpg')
     $rejected=$false;try{[void][ProfileSteamArtwork]::HeaderUrl('{"header_image":"https://unrelated.example/steam/apps/12345/header.jpg"}','12345')}catch{$rejected=$true};Assert 'artwork metadata cannot redirect downloads to arbitrary hosts' $rejected
     $library=New-Object 'Collections.Generic.List[ProfileGameView]';for($i=0;$i -lt 8;$i++){$v=New-Object ProfileGameView;$v.Name='Fixture game '+$i;$v.Duration='1 小时';$v.Recent='最近 2026-11-14 周六';$library.Add($v)}
-    $w.Navigate('Games');$w.SetGameCards($library.ToArray());Assert 'large game libraries start with six cards and can expand without losing totals' ($w.GameHost.Controls.Count -eq 6 -and $w.GameLibraryMore.Visible)
+    $w.Navigate('Games');$w.SetGameCards($library.ToArray());Assert 'large game libraries start with six cards and can expand without losing totals' ($w.GameHost.Controls.Count -eq 6 -and $w.GameLibraryMore.Visible -and $w.GameHost.Controls[0].CanSelect)
     $firstCard=$w.GameHost.Controls[0];$w.GameLibraryMore.PerformClick();Assert 'expanding library reuses existing cards and shows the remaining games' ($w.GameHost.Controls.Count -eq 8 -and [object]::ReferenceEquals($firstCard,$w.GameHost.Controls[0]))
 }finally{
     if($w){$w.Dispose()};if($Script:EnergyService){$Script:EnergyService.Dispose()};if($Script:EnergyLogTimer){$Script:EnergyLogTimer.Dispose()}

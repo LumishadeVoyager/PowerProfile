@@ -102,7 +102,7 @@ public sealed class ProfileSteamArtwork {
 public sealed class ProfileGameCard : ProfileSurface {
     public ProfileGameView View;public bool Selected;public string AppId;public ProfileSteamArtwork Artwork;
     Bitmap cover;bool requested;readonly ProfileHoverTip tip;
-    public ProfileGameCard(){Height=224;Padding=Padding.Empty;TabStop=true;Cursor=Cursors.Hand;AccessibleRole=AccessibleRole.PushButton;tip=new ProfileHoverTip(this);}
+    public ProfileGameCard(){SetStyle(ControlStyles.Selectable,true);Height=224;Padding=Padding.Empty;TabStop=true;Cursor=Cursors.Hand;AccessibleRole=AccessibleRole.PushButton;tip=new ProfileHoverTip(this);}
     public void Update(ProfileGameView view){View=view;AccessibleName=view.Name;AccessibleDescription=view.Duration+" · "+view.Sessions+" 个片段；按 Enter 查看会话";tip.Update(view.Detail);Invalidate();}
     protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);RequestCover();}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);RequestCover();}
