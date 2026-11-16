@@ -67,6 +67,12 @@ try{
     $w.AICurrency.SelectedItem='USD';Write-AtomicJson (Join-Path $root 'ai.charges.json') @{charges=@(@{date=$Script:fixture.LocalDay;client='Codex';currency='USD';amount=20})}
     $w.Tag.AIChargeRevision='fixture-charge';$w.AIView.SelectedIndex=2
     Assert 'independent expense view keeps tokens and charges in distinct cards' ($w.AICost.Caption.Text -match '独立支出' -and $w.AICost.Value.Text -eq '20.00' -and $w.AITokens.Value.Text -eq '1.20 万' -and -not $w.AIChartHost.Visible)
+    $oldAI=$aiRow.PSObject.Copy();$oldAI.date=$today.AddDays(-520).ToString('yyyy-MM-dd');$oldAI.tokens=8000;$oldAI.pricedTokens=0;$oldAI.cost=$null;$oldAI.currency=$null
+    Write-AtomicJson (Join-Path $root 'ai.snapshot.json') @{version=1;revision='all-time';updatedAt=[DateTime]::UtcNow.ToString('o');rows=@($aiRow,$oldAI);combinedRows=@($aiRow,$oldAI);daily=@($aiRow);combinedDaily=@($aiRow);status=@{};errors=@{}}
+    $w.AIView.SelectedIndex=0;$w.Tag.AIKey='';Update-WorkspaceAI
+    Assert 'AI defaults to combined all-history including records older than 400 days' ($w.AISource.SelectedIndex -eq 2 -and $w.AIRange.SelectedIndex -eq 4 -and $w.AIGrid.Rows.Count -eq 2 -and $w.AITokens.Value.Text -eq '2.00 万' -and $w.Tag.AIChart.Periods.Count -eq 521 -and -not $w.Sections['AIFilters'].Expanded -and $w.AIPeriodSummary.Text -match $oldAI.date)
+    $w.AIRange.SelectedIndex=0;Assert 'optional date filtering leaves lifetime total intact' ($w.AIGrid.Rows.Count -eq 1 -and $w.AITokens.Value.Text -eq '2.00 万')
+    $w.AIRange.SelectedIndex=4
     $w.AIView.SelectedIndex=0;$w.ClientSize=New-Object Drawing.Size 420,600;[Windows.Forms.Application]::DoEvents()
     Assert 'narrow AI view stacks cards without clipping' ($w.AICost.Top -ge $w.AITokens.Bottom -and $w.AICost.Right -le $w.AIStatHost.Width)
     $w.ClientSize=New-Object Drawing.Size 540,720;$w.Navigate('Energy')
@@ -91,8 +97,8 @@ try{
     $pixels=New-Object Drawing.Bitmap $w.Width,$w.Height;try{$w.DrawToBitmap($pixels,(New-Object Drawing.Rectangle 0,0,$pixels.Width,$pixels.Height));Assert 'liquid scene and charts render in the full portrait window' ($pixels.Width -gt 400 -and $w.AITokens.Value.Height -ge $w.AITokens.Value.Font.Height)}finally{$pixels.Dispose()}
     $w.Skin.SelectedIndex=1
     $viewPrefsHash=(Get-FileHash (Join-Path $root 'workspace.settings.json')).Hash
-    Open-WorkspaceAIView 'Costs';Assert 'fixed fee view opens actual data without saving transient source selection' ($w.ActivePage -eq 'AI' -and $w.AISource.SelectedIndex -eq 1 -and $w.AIView.SelectedIndex -eq 1 -and $w.AIRange.SelectedIndex -eq 3)
-    Open-WorkspaceAIView 'Combined';Assert 'fixed combined view opens token overlay without device actions' ($w.ActivePage -eq 'Energy' -and $w.Tag.Chart.AnalyticsMode -eq 1 -and $w.AISource.SelectedIndex -eq 0)
+    Open-WorkspaceAIView 'Costs';Assert 'fixed fee view opens actual data without saving transient source selection' ($w.ActivePage -eq 'AI' -and $w.AISource.SelectedIndex -eq 2 -and $w.AIView.SelectedIndex -eq 1 -and $w.AIRange.SelectedIndex -eq 4)
+    Open-WorkspaceAIView 'Combined';Assert 'fixed combined view opens token overlay without device actions' ($w.ActivePage -eq 'Energy' -and $w.Tag.Chart.AnalyticsMode -eq 1 -and $w.AISource.SelectedIndex -eq 2)
     Open-WorkspaceAIView 'Tokens';Assert 'fixed view navigation preserves saved appearance and filter preferences' ($w.ActivePage -eq 'AI' -and $w.AIView.SelectedIndex -eq 0 -and (Get-FileHash (Join-Path $root 'workspace.settings.json')).Hash -eq $viewPrefsHash -and -not $w.TopMost)
     $w.MetricOptions['game'].Checked=$false;Assert 'card preference persists separately' ((Get-WorkspacePreferences).metrics -notcontains 'game')
     $prefs=Get-WorkspacePreferences;$prefs.devices|Add-Member -NotePropertyName 'lamp' -NotePropertyValue ([PSCustomObject]@{alias='Desk lamp';room='Study';favorite=$true});Save-WorkspacePreferences $prefs

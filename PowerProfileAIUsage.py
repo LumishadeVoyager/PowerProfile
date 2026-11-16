@@ -42,6 +42,61 @@ def counters(usage,codex=False):
     # Codex input already contains cache reads; reasoning is a subset of output.
     return [max(0,inp-cached-write) if codex else inp,cached,write,out]
 
+def cc_counters(row):
+    values=[count(row[f]) for f in ('input_tokens','cache_read_tokens','cache_creation_tokens','output_tokens')]
+    semantics=row['input_token_semantics'] if 'input_token_semantics' in row.keys() else 0
+    deduction=values[1]+(values[2] if semantics==1 else 0)
+    if row['app_type']=='codex' and semantics!=2 and values[0]>=deduction:values[0]-=deduction
+    return values
+
+def cc_effective_filter(columns):
+    # Match CC Switch's session/proxy mirror filter using usage metadata only.
+    if not {'data_source','status_code'}<=columns:return '1'
+    alias=" or (l.app_type='codex' and coalesce(l.data_source,'proxy')='codex_session' and lower(trim(p.request_model))=lower(trim(l.model)) and trim(p.request_model)<>'' and lower(trim(p.request_model))<>'unknown')" if 'request_model' in columns else ''
+    semantics='p.input_token_semantics' if 'input_token_semantics' in columns else '0'
+    return f"""not (coalesce(l.data_source,'proxy') in ('session_log','codex_session','gemini_session','opencode_session') and exists (
+        select 1 from proxy_request_logs p where coalesce(p.data_source,'proxy')='proxy'
+        and p.app_type in (l.app_type,case when l.app_type='claude' then 'claude-desktop' else l.app_type end)
+        and p.status_code>=200 and p.status_code<300
+        and p.input_tokens=l.input_tokens and p.output_tokens=l.output_tokens and p.cache_read_tokens=l.cache_read_tokens
+        and (p.cache_creation_tokens=l.cache_creation_tokens or (l.cache_creation_tokens=0 and coalesce(l.data_source,'proxy') in ('codex_session','gemini_session','opencode_session')) or (p.cache_creation_tokens=0 and {semantics}=0 and coalesce(l.data_source,'proxy')='codex_session'))
+        and p.created_at between l.created_at-600 and l.created_at+600
+        and (lower(p.model)=lower(l.model) or lower(p.model)='unknown' or lower(l.model)='unknown'{alias})))"""
+
+def combine_rows(rows):
+    """Conservative cross-source union, not an exact request-level reconciliation.
+
+    Session logs and CC Switch often mirror the same calls (including aliases).
+    Take the larger source per local day/client; retain known CC fees separately.
+    Never add token counts across sources, currencies or pricing sidecars.
+    """
+    groups={};result=[]
+    for row in rows:groups.setdefault((row['date'],row['client']),{}).setdefault(row['source'],[]).append(row)
+    fields=('input','cached','write','output','tokens','records')
+    for (day,client),sources in sorted(groups.items()):
+        base=max(sources.values(),key=lambda batch:sum(r['tokens'] for r in batch))
+        total={f:sum(r.get(f,0) for r in base) for f in fields}
+        cc=[r for r in sources.get('cc-switch',[]) if r['cost'] is not None]
+        fees=cc or [r for r in base if r['cost'] is not None];remaining=[total[f] for f in fields[:4]]
+        batches=[];unassigned=total['tokens']
+        for currency in sorted({r['currency'] for r in fees}):
+            selected=[r for r in fees if r['currency']==currency]
+            covered=min(unassigned,sum(r['pricedTokens'] for r in selected));unassigned-=covered
+            batches.append((currency,sum(r['cost'] for r in selected),covered))
+        if unassigned or not batches:batches.append((None,None,unassigned))
+        for i,(currency,cost,n) in enumerate(batches):
+            # Partition the token base between currencies and unknown pricing,
+            # preserving every component and never multiplying the usage total.
+            available=sum(remaining)
+            parts=[n*v//available if available else 0 for v in remaining]
+            order=sorted(range(4),key=lambda k:(n*remaining[k]%available) if available else 0,reverse=True)
+            for k in order[:n-sum(parts)]:parts[k]+=1
+            remaining=[v-p for v,p in zip(remaining,parts)]
+            result.append(dict(zip(fields[:4],parts),tokens=n,records=total['records'] if i==0 else 0,
+                date=day,client=client,model='自动合并',source='combined',currency=currency,cost=cost,
+                pricedTokens=n if cost is not None else 0))
+    return result
+
 class Monitor:
     def __init__(self,root,home=None,now=None,historical=False,cutoff=None):
         self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True);self.home=Path(home or Path.home())
@@ -162,19 +217,32 @@ class Monitor:
             if not required<=columns:raise ValueError('Unsupported CC Switch usage schema')
             names=sorted(required|({'input_token_semantics','pricing_model'}&columns))
             # Restrict reads to usage columns; never query credentials, messages, or provider URLs.
-            query='select '+','.join(names)+' from proxy_request_logs where created_at>=? order by created_at'
-            lower=max(self.start.timestamp(),self.state.get('ccCursor',self.start.timestamp())-7*86400)
-            for r in conn.execute(query,(int(lower),)):
+            # Read details and archives in one SQLite snapshot: compaction inserts
+            # daily totals and deletes details in the same source transaction.
+            conn.execute('begin')
+            details=conn.execute('select '+','.join('l.'+n for n in names)+' from proxy_request_logs l where l.created_at>=? and '+cc_effective_filter(columns)+' order by l.created_at',(int(self.start.timestamp()),)).fetchall()
+            rollups=[]
+            if not self.historical:
+                rc={r[1] for r in conn.execute('pragma table_info(usage_daily_rollups)')}
+                rr=(required-{'request_id','created_at'})|{'date'}
+                if rc:
+                    if not rr<=rc:raise ValueError('Unsupported CC Switch rollup schema')
+                    rn=sorted(rr|({'input_token_semantics','pricing_model','request_count'}&rc))
+                    rollups=[dict(r) for r in conn.execute('select '+','.join(rn)+' from usage_daily_rollups')]
+            conn.rollback()
+            # Reconcile the authoritative source, rather than retaining requests
+            # that CC Switch has since moved into a rollup (double counting).
+            self.state['days']={k:v for k,v in self.state['days'].items() if json.loads(k)[3]!='cc-switch'}
+            self.state['ccRequests'].clear()
+            if not self.historical:self.state['ccRollups']=rollups
+            for r in details:
                 client={'codex':'Codex','claude':'Claude Code'}.get(r['app_type'])
                 if not client:continue
                 when=stamp(r['created_at'])
                 if when<self.start or self.cutoff and when>=self.cutoff:continue
                 self.state['ccCursor']=max(self.state.get('ccCursor',0),when.timestamp())
                 key='cc:'+digest(r['request_id'])
-                inp=count(r['input_tokens']);cached=count(r['cache_read_tokens']);write=count(r['cache_creation_tokens']);out=count(r['output_tokens'])
-                # Legacy Codex rows use total input; Claude rows use fresh input.
-                semantics=r['input_token_semantics'] if 'input_token_semantics' in columns else 0
-                if client=='Codex' and semantics!=2:inp=max(0,inp-cached-(write if semantics==1 else 0))
+                inp,cached,write,out=cc_counters(r)
                 cost=number(r['total_cost_usd'])
                 if cost==0 and 'pricing_model' in columns and not r['pricing_model']:cost=None
                 value={'when':when.isoformat(),'client':client,'model':r['model'],'tokens':[inp,cached,write,out],'cost':cost}
@@ -188,6 +256,28 @@ class Monitor:
                         if old['cost'] is not None:prior['sourceCost']-=old['cost'];prior['pricedTokens']-=sum(old['tokens']);prior['pricedRecords']=max(0,prior.get('pricedRecords',1)-1)
                 self.add(when,client,r['model'],'cc-switch',value['tokens'],cost);self.state['ccRequests'][key]=value
         return True
+    def price_row(self,day,client,model,source,r,prices):
+        total=sum(r[f] for f in ('input','cached','write','output'));rate=prices.get(model)
+        estimate=None;currency=None;priced=0
+        if source=='cc-switch' and r.get('pricedRecords',0)>0:estimate=max(0,r['sourceCost']);currency='USD';priced=r['pricedTokens']
+        elif isinstance(rate,dict):
+            rates=[number(rate.get(f)) for f in ('input','cached','write','output')]
+            if all(n is not None for n in rates):estimate=sum(r[f]*n/1e6 for f,n in zip(('input','cached','write','output'),rates));currency=rate.get('currency','USD');priced=total
+        return dict(r,date=day,client=client,model=model,source=source,tokens=total,cost=estimate,currency=currency,pricedTokens=priced)
+    def rollup_rows(self,prices):
+        rows=[]
+        for r in self.state.get('ccRollups',[]):
+            client={'codex':'Codex','claude':'Claude Code'}.get(r['app_type'])
+            if not client:continue
+            try:day=datetime.strptime(r['date'],'%Y-%m-%d').date()
+            except (ValueError,TypeError):continue
+            if day>datetime.now(CHINA).date():continue
+            values=cc_counters(r);cost=number(r['total_cost_usd'])
+            if cost==0 and not r.get('pricing_model'):cost=None
+            n=count(r.get('request_count',1));data=dict(zip(('input','cached','write','output'),values))
+            data.update(sourceCost=cost or 0,pricedTokens=sum(values) if cost is not None else 0,records=n,pricedRecords=n if cost is not None else 0)
+            rows.append(self.price_row(r['date'],client,r['model'],'cc-switch',data,prices))
+        return rows
     def run(self,write_snapshot=True):
         self.errors={}
         cfg=read_json(self.root/'ai.settings.json',{})
@@ -207,17 +297,12 @@ class Monitor:
                         if self.historical and cp and cp.get('size',-1)>=0:continue
                         self.scan_file(path,client)
                     except OSError:self.errors[client]='部分日志暂不可读，将重试'
-        try:status['CC Switch']='已接入（独立来源）' if self.cc_switch(Path(cfg.get('ccSwitchPath') or self.home/'.cc-switch'/'cc-switch.db')) else '未发现数据库'
+        try:status['CC Switch']='已接入（明细 + 历史日汇总）' if self.cc_switch(Path(cfg.get('ccSwitchPath') or self.home/'.cc-switch'/'cc-switch.db')) else '未发现数据库'
         except (OSError,sqlite3.Error,ValueError):status['CC Switch']='数据库暂不可读或版本不支持，将重试'
         rows=[];prices=cfg.get('prices',{})
         for key,r in self.state['days'].items():
-            day,client,model,source=json.loads(key);total=sum(r[f] for f in ('input','cached','write','output'));rate=prices.get(model)
-            estimate=None;currency=None;priced=0
-            if source=='cc-switch' and r.get('pricedRecords',0)>0:estimate=max(0,r['sourceCost']);currency='USD';priced=r['pricedTokens']
-            elif isinstance(rate,dict):
-                rates=[number(rate.get(f)) for f in ('input','cached','write','output')]
-                if all(n is not None for n in rates):estimate=sum(r[f]*n/1e6 for f,n in zip(('input','cached','write','output'),rates));currency=rate.get('currency','USD');priced=total
-            rows.append(dict(r,date=day,client=client,model=model,source=source,tokens=total,cost=estimate,currency=currency,pricedTokens=priced))
+            day,client,model,source=json.loads(key)
+            rows.append(self.price_row(day,client,model,source,r,prices))
         snapshot={'version':1,'startedAt':self.state['startedAt'],'updatedAt':datetime.now(UTC).isoformat(),'status':status,'errors':self.errors,'rows':rows,'note':'费用是来源估算或自定义单价估算，不是订阅账单；不同来源不相加。'}
         daily={}
         for r in rows:
@@ -235,7 +320,7 @@ class Monitor:
             try:past=history.run(False)
             finally:history.db.close()
             merged={}
-            for row in past['rows']+snapshot['rows']:
+            for row in past['rows']+snapshot['rows']+self.rollup_rows(prices):
                 key=(row['date'],row['client'],row['model'],row['source'],row['currency']);target=merged.get(key)
                 if target is None:merged[key]=dict(row);continue
                 for field in ('input','cached','write','output','sourceCost','pricedTokens','records','pricedRecords','tokens'):target[field]+=row[field]
@@ -247,6 +332,10 @@ class Monitor:
                 d['tokens']+=r['tokens'];d['pricedTokens']+=r['pricedTokens']
                 if r['cost'] is not None:d['cost']=(d['cost'] or 0)+r['cost']
             snapshot['daily']=list(daily.values())
+            snapshot['combinedRows']=combine_rows(snapshot['rows'])
+            snapshot['combinedDaily']=snapshot['combinedRows']
+            snapshot['mergeMethod']='day-client-max'
+            snapshot['note']='自动合并按日期 / 客户端取较大来源，是保守估计，并非逐请求精确去重；费用优先采用 CC Switch 已知估算，缺价不等于零。'
             pending=any(cp.get('size',-1)<0 for cp in history.state['files'].values())
             snapshot['backfill']={'status':'部分文件待重试' if past['errors'] else '回填中' if pending else '已导入可读取历史','earliestDate':min((r['date'] for r in snapshot['rows']),default=None),'boundary':self.start.isoformat()}
             snapshot['errors'].update({'历史 '+k:v for k,v in past['errors'].items()})

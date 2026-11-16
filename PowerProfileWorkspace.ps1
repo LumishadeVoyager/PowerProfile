@@ -12,8 +12,8 @@ function Open-WorkspaceAIView {
     Show-ProfileWorkspace -Page $(if($View -eq 'Combined'){'Energy'}else{'AI'})
     $w=$Script:Workspace;$t=$w.Tag;$suppressed=$t.Suppress;$t.Suppress=$true
     try{
-        $w.AIClient.SelectedIndex=0;$w.AICurrency.SelectedItem='USD';$w.AISource.SelectedIndex=$(if($View -eq 'Costs'){1}else{0})
-        $w.AIView.SelectedIndex=$(if($View -eq 'Costs'){1}else{0});$w.AIRange.SelectedIndex=$(if($View -eq 'Costs'){3}else{1})
+        $w.AIClient.SelectedIndex=0;$w.AICurrency.SelectedItem='USD';$w.AISource.SelectedIndex=2
+        $w.AIView.SelectedIndex=$(if($View -eq 'Costs'){1}else{0});$w.AIRange.SelectedIndex=4
         if($View -eq 'Combined'){$w.AnalysisMode.SelectedIndex=1}
     }finally{$t.Suppress=$suppressed}
     $t.AIKey='';$t.AIOverlayKey='';Update-ProfileWorkspace

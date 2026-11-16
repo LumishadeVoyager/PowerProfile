@@ -1,6 +1,6 @@
-# AI 用量与费用
+﻿# AI 用量与费用
 
-适用于 v1.5.1。顶部七个页面为 **总览 / 趋势 / AI / 游戏 / 设备 / 任务 / 设置**。保留 3:4 纵向窗口；AI 采集在独立进程运行，界面只读取汇总快照。
+适用于 v1.6.2。顶部七个页面为 **总览 / 趋势 / AI / 游戏 / 设备 / 任务 / 设置**。保留 3:4 纵向窗口；AI 采集在独立进程运行，界面只读取汇总快照。
 
 ## 开始使用
 
@@ -15,23 +15,23 @@
 | --- | --- | --- |
 | Codex | `%USERPROFILE%\.codex\sessions` 及 `archived_sessions` | 模型、累计输入 / 缓存 / 输出用量 |
 | Claude Code | `%USERPROFILE%\.claude\projects` | 模型、消息用量及缓存读写 |
-| CC Switch | `%USERPROFILE%\.cc-switch\cc-switch.db` | 代理请求用量及数据库已有的 USD 费用估算 |
+| CC Switch | `%USERPROFILE%\.cc-switch\cc-switch.db` | 近期请求明细、历史日汇总及数据库已有的 USD 费用估算 |
 
-软件无法读取其他电脑、仅保存在云端的用量、已删除且从未导入的日志，或不兼容来源的数据。这里的“本机累计”指 **所选来源中可读取并已导入的记录**，不是账号全平台账单。
+软件无法读取其他电脑、仅保存在云端的用量、已删除且从未导入的日志，或不兼容来源的数据。这里的“本机累计”指 **可读取并已导入的记录，默认以自动合并的保守口径展示**，不是账号全平台账单。
 
 ## 历史回填与累计
 
 首次运行自动导入可读取的历史，同时保留升级前已采集的数据。历史回放与实时采集以首次启用时间为边界，两段不重叠。导入进度和计数检查点保存在本机，重启不会重新累计同一批记录。历史文件导入完成后冻结检查点；其后新增记录由实时采集器处理。
 
-AI 页顶部用两张卡片显示所选来源 / 客户端的累计 tokens 和当前所选币种的累计估算。构成条区分 Codex / Claude Code；进度条显示该币种的计价覆盖。其他币种、精确总量与独立支出可在折叠的统计详情中查看；当前日期范围的用量显示在图表旁。图表与明细可切换近 7 / 30 / 90 / 400 天；累计数不受日期范围和模型搜索影响。日期采用北京时间，附星期。
+AI 页顶部用两张卡片显示所选来源 / 客户端的累计 tokens 和当前所选币种的累计估算。构成条区分 Codex / Claude Code；进度条显示该币种的计价覆盖。其他币种、精确总量与独立支出可在折叠的统计详情中查看；当前日期范围的用量显示在图表旁。默认从最早可恢复记录展示至今，没有 400 天上限。日期、客户端、来源及搜索收在折叠的“筛选与来源”；需要时可切换近 7 / 30 / 90 / 400 天，或分别核对客户端日志 / CC Switch。累计数不受日期范围和模型搜索影响。日期采用北京时间，附星期。
 
-客户端日志与 CC Switch 可能记录同一个请求，**切换来源查看，不把两个来源相加**。CC Switch 只覆盖经它记录的代理请求；客户端日志覆盖范围可能不同，两边总量不一致不一定是错误。
+默认“自动合并”按北京时间日期和客户端汇总，**同一天同一客户端取 tokens 较大的来源，不相加**。这个保守估计避免来源镜像和模型别名产生重复，但无法逐请求精确去重；同一天两来源若有各自独有请求，可能低估。费用优先保留 CC Switch 已知估算，否则采用较大用量来源的自定价结果；缺价部分保留待配置。不同币种分别展示，tokens 只计一次。模型明细可在“筛选与来源”切回原始来源核对。CC Switch 的 session 导入和代理明细按其元数据匹配规则排除镜像记录。
 
 计数规则：
 
 - Codex 累计计数取增量，不把每次累计值相加；缓存输入属于输入的一部分，推理输出不再次加到输出。累计计数重置时采用保守增量，不重收整段上下文。缺少继承基线的分支会话可能低估，保留未知模型名，不猜测供应商。
 - Claude Code 同一消息的流式副本按消息 ID 和分量最大值去重；新增输入、缓存读取、缓存写入、输出分别保存。
-- CC Switch 使用请求 ID 去重，读取版本可用的输入语义；最近七天的费用补写会修正已有条目，不再增加 tokens。数据库使用只读连接，结构不支持时保留错误提示。
+- CC Switch 同时读取 `proxy_request_logs` 和 `usage_daily_rollups`。旧明细会被 CC Switch 归档为日汇总后删除，仅读近期明细会漏掉早期月份；升级后自动补入日汇总。每轮在同一个只读 SQLite 快照核对两张表，按来源现有内容替换对应汇总，避免旧请求再与归档重复相加，也能修正更早的费用补写。读取版本可用的输入语义，已归一化为新增输入的汇总不再次扣除缓存。数据库不可读时保留已导入数据。
 - 用量按记录时间归属日期；无法从缺失的日志还原精确请求时间，不按电脑使用时长或游戏档位推算 AI 用量。
 
 ## 费用与币种
@@ -67,6 +67,7 @@ AI 两条线用不同颜色区分，可独立显示 / 隐藏。沿用日 / 周 /
 - **等待采集器**：检查 Python 3 是否可用，重启托盘；有自定义目录时检查“接入”。Windows Store 的未安装 Python 别名不能运行采集器。
 - **超过两分钟未更新**：查看 `ai.collector.status.json`；保留最后数据，不用零覆盖。
 - **待配置**：检查精确模型名称及四项单价；CC Switch 还需要来源本身记录价格。
+- **找不到开始使用的月份**：先查看最早可恢复日期。CC Switch 的日汇总也会读取；如果源数据库、现存备份和客户端日志均无对应月份，程序不能凭空恢复。完整数据库备份可先复制到另一位置，再在“本地来源接入”中指向副本核对，不要将多个备份直接相加。
 - **累计比账号账单少**：核对来源范围、历史回填状态、日志保留情况及计价覆盖。这里只能测量本机记录；无法自动还原云端账单和订阅付款。
 
-协议依据：[Codex token accounting](https://github.com/openai/codex/blob/main/codex-rs/tui/src/token_usage.rs)、[Claude Code costs](https://code.claude.com/docs/en/costs)、[CC Switch input semantics](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/sql_helpers.rs)、[CC Switch usage costs](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/proxy/usage/logger.rs)。适配日志结构发生变化时可能需要更新程序。
+协议依据：[Codex token accounting](https://github.com/openai/codex/blob/main/codex-rs/tui/src/token_usage.rs)、[Claude Code costs](https://code.claude.com/docs/en/costs)、[CC Switch input semantics](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/sql_helpers.rs)、[CC Switch historical rollups](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/database/dao/usage_rollup.rs)、[CC Switch usage costs](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/proxy/usage/logger.rs)。适配日志结构发生变化时可能需要更新程序。
