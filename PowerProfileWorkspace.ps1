@@ -1,5 +1,5 @@
 ﻿. (Join-Path $PSScriptRoot 'PowerProfileWorkspaceData.ps1')
-if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileSkin.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
+if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileCards.cs'),(Join-Path $PSScriptRoot 'PowerProfileSkin.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
 . (Join-Path $PSScriptRoot 'PowerProfileInsights.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileWorkspaceAsync.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileConnectionUI.ps1')
@@ -63,7 +63,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
             'Skin'{$prefs=Get-WorkspacePreferences;$prefs.skin=$Id;Save-WorkspacePreferences $prefs;return}
             'Glass'{$prefs=Get-WorkspacePreferences;$prefs.glass=$w.Glass.Checked;Save-WorkspacePreferences $prefs;return}
             'Motion'{$prefs=Get-WorkspacePreferences;$prefs.motion=$w.Motion.Checked;Save-WorkspacePreferences $prefs;return}
-            'GameColumns'{$show=-not $w.GameSessions.Columns[2].Visible;foreach($i in @(2,4,5,6,7)){$w.GameSessions.Columns[$i].Visible=$show};foreach($i in @(3,4,5)){$w.GameTotals.Columns[$i].Visible=$show};return}
+            'GameColumns'{$w.ShowSection('GameTable');$w.ShowSection('GameSessions');$show=-not $w.GameSessions.Columns[2].Visible;foreach($i in @(2,4,5,6,7)){$w.GameSessions.Columns[$i].Visible=$show};foreach($i in @(3,4,5)){$w.GameTotals.Columns[$i].Visible=$show};return}
             'Page'{if($t.DeferModels -and $Id -in @('Energy','Games')){Start-WorkspaceModels;return};Update-ProfileWorkspace;return}
             'Theme'{$prefs=Get-WorkspacePreferences;$prefs.theme=@('System','Light','Dark')[[int]$Id];Save-WorkspacePreferences $prefs;$w.SetTheme([int]$Id);$t.Chart.DarkMode=[ProfileTheme]::Dark;$t.Chart.BackColor=[ProfileTheme]::Surface;$t.Chart.ForeColor=[ProfileTheme]::Text;$t.Chart.Invalidate();return}
             'TextSize'{$prefs=Get-WorkspacePreferences;$prefs.textScale=[int]$Id;Save-WorkspacePreferences $prefs;$page=$w.ActivePage;$w.Dispose();Show-ProfileWorkspace -Page $page;return}
@@ -78,6 +78,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
             'LedgerSelection'{if($t.EnergyData.Details.ContainsKey($Id)){$w.SelectionInfo.Text=$t.EnergyData.Details[$Id]};return}
             'ChartSelection'{$w.SelectLedger($Id);return}
             'FilterDevices'{$t.DeviceKey='';Update-ProfileWorkspace;return}
+            'DeviceTasks'{$w.Navigate('Automation');return}
             'CalendarFilter'{$t.ScheduleKey='';Update-ProfileWorkspace;return}
             'Week'{$w.WeekOffset=if($Id -eq '0'){0}else{$w.WeekOffset+[int]$Id};$t.ScheduleKey='';Update-ProfileWorkspace;return}
             'Favorite'{$prefs=Get-WorkspacePreferences;$old=$prefs.devices.($Id);$prefs.devices|Add-Member -NotePropertyName $Id -NotePropertyValue ([PSCustomObject]@{alias=$old.alias;room=$old.room;favorite=(-not [bool]$old.favorite)}) -Force;Save-WorkspacePreferences $prefs;$t.DeviceKey='';Update-ProfileWorkspace;return}
@@ -89,7 +90,7 @@ function Invoke-WorkspaceCommand([string]$Action,[string]$Id=''){
                 if(-not $on -and (Test-HubPlug $device)){
                     if([Windows.Forms.MessageBox]::Show($w,"确认关闭 $($device.name)？`r`n这将切断负载供电。电脑插座断电不等于正常关机；请确认电池或设备可安全断电。`r`n本机停止、休眠或断网后无法继续执行之后的通电任务。",'插座断电确认','YesNo','Warning','Button2') -ne 'Yes'){return};$ack=$true
                 }
-                $t.PendingRequest=Send-DeviceHubRequest 'set' $device $on -PowerRiskAcknowledged $ack;$t.PendingSince=[DateTime]::UtcNow;$w.Footer.Text='◷ 指令已排队，等待中枢发送与实际状态读回';return
+                $t.PendingRequest=Send-DeviceHubRequest 'set' $device $on -PowerRiskAcknowledged $ack;$t.PendingDevice=$Id;$t.PendingSince=[DateTime]::UtcNow;$t.DeviceKey='';$w.Footer.Text='◷ 指令已排队，等待中枢发送与实际状态读回';Update-ProfileWorkspace;return
             }
             {$_ -in @('DeviceSchedule','NewRule')}{
                 $device=if($Id){Get-WorkspaceSelectedDevice $Id}else{Select-WorkspaceDevice};if($device){Show-WorkspaceDialog (Show-HubRuleEditor $device -ReturnForm);$t.ScheduleKey=''};Update-ProfileWorkspace;return
@@ -145,6 +146,7 @@ function Update-ProfileWorkspace {
         $prefs=Get-WorkspacePreferences;$groups=@('全部分组')+@($hub.Status.devices|ForEach-Object {$p=$prefs.devices.($_.did);if($p.room){$p.room}else{'未分组'}}|Sort-Object -Unique)
         if(($groups -join '|') -ne (@($w.Room.Items) -join '|')){$selected=$w.Room.SelectedItem;$t.Suppress=$true;$w.Room.Items.Clear();foreach($g in $groups){[void]$w.Room.Items.Add($g)};$w.Room.SelectedItem=if($groups -contains $selected){$selected}else{'全部分组'};$t.Suppress=$false}
         $devices=Get-WorkspaceDevices $hub $prefs $State $future.Next $w.Search.Text ([string]$w.Room.SelectedItem) $w.Favorites.Checked
+        $online=@($hub.Status.devices|Where-Object {$_.observedAt -and ([DateTime]::UtcNow-([DateTime]$_.observedAt).ToUniversalTime()).TotalSeconds -le 90}).Count;$w.DeviceSummary.Text=('{0} 台设备 · {1}' -f @($hub.Status.devices).Count,$(if(-not $hub.Config.enabled){'中枢已暂停'}elseif(-not $hub.Fresh){'中枢离线 / 待同步'}else{[string]$online+' 台状态已同步'}))
         $key=ConvertTo-Json -InputObject $devices.ToArray() -Depth 5 -Compress
         if($t.DeviceKey -ne $key){$t.DeviceKey=$key;$scroll=$w.Pages['Devices'].AutoScrollPosition;$w.SetDevices($devices.ToArray());$w.Pages['Devices'].AutoScrollPosition=New-Object Drawing.Point (-$scroll.X),(-$scroll.Y)}
     }
@@ -162,13 +164,13 @@ function Update-ProfileWorkspace {
         }
     }
     Update-WorkspaceAI
-    if($t.PendingRequest){$operation=@($hub.Status.operations|Where-Object {$_.id -eq $t.PendingRequest})[0];if($operation){$w.Footer.Text=@{sending='◷ 正在发送';checking='◷ 等待实际状态读回';confirmed='✓ 已完成并读回';failed='! 操作失败'}[$operation.phase]+' · '+$operation.message;if($operation.phase -in @('confirmed','failed')){$t.PendingRequest=$null;$t.DeviceKey=''}}elseif($t.PendingSince -and ([DateTime]::UtcNow-$t.PendingSince).TotalSeconds -gt 120){$w.Footer.Text='! 请求已超时，未确认执行；请检查连接和设备实际状态后再试。';$t.PendingRequest=$null}}
+    if($t.PendingRequest){$operation=@($hub.Status.operations|Where-Object {$_.id -eq $t.PendingRequest})[0];if($operation){$w.Footer.Text=@{sending='◷ 正在发送';checking='◷ 等待实际状态读回';confirmed='✓ 已完成并读回';failed='! 操作失败'}[$operation.phase]+' · '+$operation.message;if($operation.phase -in @('confirmed','failed')){$t.PendingRequest=$null;$t.PendingDevice=$null;$t.DeviceKey=''}}elseif($t.PendingSince -and ([DateTime]::UtcNow-$t.PendingSince).TotalSeconds -gt 120){$w.Footer.Text='! 请求已超时，未确认执行；请检查连接和设备实际状态后再试。';$t.PendingRequest=$null;$t.PendingDevice=$null;$t.DeviceKey=''}}
 }
 function Show-ProfileWorkspace {
     param([string]$Page='Overview',[switch]$ReturnForm)
     if($Script:Workspace -and -not $Script:Workspace.IsDisposed){$Script:Workspace.Show();$Script:Workspace.Navigate($Page);[ProfileVisual]::ActivateDashboard($Script:Workspace.Handle);if($ReturnForm){return $Script:Workspace};return}
     Initialize-EnergyService
-    $prefs=Get-WorkspacePreferences;[ProfileSkin]::Set($prefs.skin);$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w
+    $prefs=Get-WorkspacePreferences;[ProfileSkin]::Set($prefs.skin);$w=New-Object ProfileWorkspaceForm ([int]$prefs.textScale);$area=[Windows.Forms.Screen]::FromControl($w).WorkingArea;$space=New-Object Drawing.Size ($area.Width-40),($area.Height-70);$size=[ProfileWorkspaceForm]::PortraitSize($space);$w.MinimumSize=New-Object Drawing.Size ([Math]::Min(436,$size.Width+16)),([Math]::Min(596,$size.Height+39));$w.ClientSize=$size;$w.Glass.Checked=$prefs.glass;$w.Motion.Checked=$prefs.motion;[ProfileMotion]::Enabled=$prefs.motion;$w.Icon=[ProfileVisual]::CreateIcon('Balanced');$w.DeferDevices=(-not $ReturnForm);$Script:Workspace=$w;$w.ConfigureArtwork((Join-Path (Get-WorkspaceRoot) '.codex\game-covers'),([IO.Path]::GetFullPath((Get-WorkspaceRoot)).TrimEnd('\') -eq [IO.Path]::GetFullPath($ScriptDir).TrimEnd('\')))
     $chart=New-Object ProfileInteractiveTimeline;$chart.Dock='Fill';$w.ChartHost.Controls.Add($chart)
     $aiChart=New-Object ProfileInteractiveTimeline;$aiChart.Dock='Fill';$aiChart.AIOnly=$true;$w.AIChartHost.Controls.Add($aiChart)
     $timer=New-Object Windows.Forms.Timer;$timer.Interval=2000

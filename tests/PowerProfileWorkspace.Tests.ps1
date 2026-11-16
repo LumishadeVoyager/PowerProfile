@@ -105,6 +105,16 @@ try{
     $w.Navigate('Devices');Assert 'device cards replace raw device table' ($w.DeviceHost.Controls.Count -eq 2)
     $originalCard=$w.DeviceHost.Controls[0];$w.Tag.DeviceKey='';Update-ProfileWorkspace
     Assert 'device refresh reuses existing controls when identity is unchanged' ([object]::ReferenceEquals($originalCard,$w.DeviceHost.Controls[0]))
+    Assert 'device hub uses two-column cards with individual confirmed-state toggles' ($originalCard -is [ProfileDeviceCard] -and $w.DeviceHost.MaximumColumns -eq 2 -and $originalCard.Toggle.State -eq $false -and $originalCard.Toggle.Enabled -and $w.DeviceSummary.Text -match '2 台设备')
+    $w.ClientSize=New-Object Drawing.Size 420,600;[Windows.Forms.Application]::DoEvents();$w.DeviceHost.Reflow()
+    Assert 'device cards remain two per row in the narrow portrait window' ($w.DeviceHost.Controls[0].Top -eq $w.DeviceHost.Controls[1].Top -and $w.DeviceHost.Controls[1].Right -le $w.DeviceHost.Width -and $originalCard.Toggle.Right -le $originalCard.Width -and $originalCard.Next.Bottom -lt $originalCard.Schedule.Top)
+    $w.ClientSize=New-Object Drawing.Size 540,720
+    $switchFixture=New-Object ProfileDeviceCard;$switchFixture.Show();$switchFixture.View=New-Object ProfileDeviceView;$switchFixture.View.Id='test';$switchFixture.View.Name='Fixture';$switchFixture.View.State=$false;$switchFixture.View.Online=$true;$switchFixture.View.CanControl=$true;$switchFixture.Update($switchFixture.View)
+    $Script:fixtureDeviceAction='';$switchFixture.add_Command({param($sender,$eventArgs) $Script:fixtureDeviceAction=$eventArgs.Action});$switchFixture.Toggle.PerformClick()
+    Assert 'card switch sends explicit intent without optimistic success or changing observed state' ($Script:fixtureDeviceAction -eq 'DeviceOn' -and $switchFixture.Toggle.State -eq $false)
+    $switchFixture.View.Pending=$true;$switchFixture.Update($switchFixture.View);Assert 'pending device operations disable repeated toggles and show readback wait' (-not $switchFixture.Toggle.Enabled -and $switchFixture.Status.Text -match '等待读回')
+    $switchFixture.View.Pending=$false;$switchFixture.View.State=$null;$switchFixture.View.Online=$false;$switchFixture.Update($switchFixture.View);Assert 'unknown device state is never presented as a confirmed off switch' (-not $switchFixture.Toggle.Enabled -and $null -eq $switchFixture.Toggle.State -and $switchFixture.Status.Text -match '未知')
+    $switchFixture.Dispose()
     $w.Favorites.Checked=$true;Assert 'favorite filter and local alias work' ($w.DeviceHost.Controls.Count -eq 1 -and @($w.DeviceHost.Controls[0].Controls|Where-Object {$_.Text -like '*Desk lamp*'}).Count -eq 1)
     $w.Favorites.Checked=$false;$w.Room.SelectedItem='Study';Assert 'room filter works' ($w.DeviceHost.Controls.Count -eq 1)
     $w.Room.SelectedItem='全部分组';$w.Search.Text='cuco';Assert 'model search works' ($w.DeviceHost.Controls.Count -eq 1)

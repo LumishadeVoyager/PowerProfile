@@ -86,10 +86,11 @@ function Update-WorkspaceGamesCore($State){
     $w=$Script:Workspace;$t=$w.Tag;$count=@(7,30,90,400)[$w.GameRange.SelectedIndex];$end=[DateTime]::ParseExact($State.LocalDay,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);$start=$end.AddDays(1-$count)
     $rows=@(Get-WorkspaceGameRows $State $start $end $w.GameSearch.Text.Trim());$t.GameRows=$rows;$t.Suppress=$true
     try{
-        $w.GameTotals.Rows.Clear();foreach($group in @($rows|Group-Object Name|Sort-Object @{Expression={($_.Group|Measure-Object Seconds -Sum).Sum};Descending=$true})){
+        $cards=New-Object 'Collections.Generic.List[ProfileGameView]';$w.GameTotals.Rows.Clear();foreach($group in @($rows|Group-Object Name|Sort-Object @{Expression={($_.Group|Measure-Object Seconds -Sum).Sum};Descending=$true})){
             $seconds=($group.Group|Measure-Object Seconds -Sum).Sum;$covered=($group.Group|Measure-Object Covered -Sum).Sum;$known=@($group.Group|Where-Object {$null -ne $_.KWh});$kwh=if($known.Count){($known|Measure-Object KWh -Sum).Sum}else{$null};$cost=if($null -ne $kwh -and $null -ne $State.Price){$kwh*[double]$State.Price}else{$null}
             $cells=[object[]]@($group.Name,(Format-EnergyDuration $seconds),$group.Count,('{0:N0}% · {1}' -f (100*$covered/$seconds),(Format-EnergyDuration $covered)),$(if($covered -gt 0){'{0:N1}' -f ($kwh*3600000/$covered)}else{'未采集'}),$(if($null -ne $cost){'¥{0:N3}（仅覆盖）' -f $cost}else{'未采集'}));$i=$w.GameTotals.Rows.Add($cells);$w.GameTotals.Rows[$i].Tag=$group.Name
-        };$w.GameTotals.ClearSelection();$w.GameTotals.CurrentCell=$null;Set-WorkspaceGameSessions $rows
+            $card=New-Object ProfileGameView;$card.Name=$group.Name;$card.Duration=Format-EnergyDuration $seconds;$card.Sessions=$group.Count;$latest=@($group.Group|Sort-Object {$_.Cells[1]} -Descending)[0];$lastDate=([string]$latest.Cells[1] -split "`r?`n")[0];$card.Recent='最近 '+$lastDate;$card.Detail=($cells -join ' · ');$cards.Add($card)
+        };$w.GameTotals.ClearSelection();$w.GameTotals.CurrentCell=$null;$w.SetGameCards($cards.ToArray());Set-WorkspaceGameSessions $(if($w.SelectedGame){@($rows|Where-Object Name -eq $w.SelectedGame)}else{$rows});$w.GameSummary.Text='{0} 款游戏 · {1} · {2} 个片段' -f $cards.Count,(Format-EnergyDuration (($rows|Measure-Object Seconds -Sum).Sum)),$rows.Count
         $daily=Get-WorkspaceEnergyData $State Day $count;$fallback=@($daily.Rows|Where-Object {-not $w.GameSearch.Text -or $_.Names.IndexOf($w.GameSearch.Text,[StringComparison]::OrdinalIgnoreCase) -ge 0});$w.SetGames([ProfileLedgerView[]]$fallback)
     }finally{$t.Suppress=$false}
     $w.GameInfo.Text="$(Format-EnergyCalendarDate $start) — $(Format-EnergyCalendarDate $end) · $($rows.Count) 个记录片段。选择游戏筛选会话，清空搜索或切换范围查看全部。`r`n沿用识别与切档日志；睡眠会拆分片段，手动游戏档缺少游戏证据时不算游戏。历史只有逐日名称时无法分摊到单个游戏。费用仅采样覆盖，使用当前固定电价。"
@@ -124,7 +125,8 @@ function Invoke-InsightsCommand([string]$Action,[string]$Id){
             $date=[DateTime]::ParseExact($Id,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture);$t.Suppress=$true;try{$w.Group.SelectedIndex=0;$w.CustomDates.Checked=$true;$w.FromDate.Value=$date;$w.ToDate.Value=$date;$w.LedgerSearch.Clear();$w.DayFilter.SelectedIndex=0;$w.SourceFilter.SelectedIndex=0;$w.QualityFilter.SelectedIndex=0}finally{$t.Suppress=$false};$w.ShowSection('EnergyFilters');$t.EnergyKey='';Update-ProfileWorkspace;$w.SelectLedger($Id);$w.Pages['Energy'].ScrollControlIntoView($w.Ledger);return $true
         }
         'GamesFilter'{$t.GameKey='';if($t.DeferModels){Start-WorkspaceModels}else{Update-ProfileWorkspace};return $true}
-        'GameSelect'{if($Id){$t.Suppress=$true;try{Set-WorkspaceGameSessions @($t.GameRows|Where-Object Name -eq $Id)}finally{$t.Suppress=$false}};return $true}
+        'AllGames'{$w.SelectGame('',$false);$w.GameSearch.Clear();$t.GameKey='';if($t.DeferModels){Start-WorkspaceModels}else{Update-ProfileWorkspace};return $true}
+        'GameSelect'{$t.Suppress=$true;try{Set-WorkspaceGameSessions $(if($Id){@($t.GameRows|Where-Object Name -eq $Id)}else{@($t.GameRows)})}finally{$t.Suppress=$false};return $true}
         'GameSessionSelect'{if($t.SessionDetails -and $t.SessionDetails.ContainsKey($Id)){$w.GameDetail.Text=$t.SessionDetails[$Id]};return $true}
         {$_ -in @('ExportCsv','ExportPng','ExportReport','ExportGames')}{Export-WorkspaceInsights $Action;return $true}
     };return $false

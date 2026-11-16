@@ -1185,7 +1185,7 @@ $watchTimer.Interval = 500
 $watchTimer.Add_Tick({
     $request=Join-Path $ScriptDir 'tray_ui_request.txt'
     if(Test-Path $request){
-        try{$action=(Get-Content $request -Raw -Encoding UTF8).Trim();Remove-Item -LiteralPath $request;if($action -eq 'Dashboard'){Open-ModernDashboard}elseif($action -eq 'AI'){Open-WorkspaceAIView 'Tokens'}elseif($action -eq 'AICost'){Open-WorkspaceAIView 'Costs'}elseif($action -eq 'AITrend'){Open-WorkspaceAIView 'Combined'}elseif($action -eq 'Logs'){Show-ModernLogViewer}elseif($action -eq 'Energy'){Show-EnergyDetails}}catch{Write-ProfileEvent 'ui.request.failed' $_.Exception.Message 'ERROR'}
+        try{$action=(Get-Content $request -Raw -Encoding UTF8).Trim();Remove-Item -LiteralPath $request;if($action -eq 'Dashboard'){Open-ModernDashboard}elseif($action -eq 'AI'){Open-WorkspaceAIView 'Tokens'}elseif($action -eq 'AICost'){Open-WorkspaceAIView 'Costs'}elseif($action -eq 'AITrend'){Open-WorkspaceAIView 'Combined'}elseif($action -eq 'Games'){Show-ProfileWorkspace -Page 'Games'}elseif($action -eq 'Devices'){Show-ProfileWorkspace -Page 'Devices'}elseif($action -eq 'Logs'){Show-ModernLogViewer}elseif($action -eq 'Energy'){Show-EnergyDetails}}catch{Write-ProfileEvent 'ui.request.failed' $_.Exception.Message 'ERROR'}
     }
     if (-not (Test-Path $StatePath)) { return }
     $writeTime = (Get-Item $StatePath).LastWriteTime

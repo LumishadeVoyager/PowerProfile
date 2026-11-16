@@ -108,9 +108,10 @@ function Get-WorkspaceDevices($Hub,$Preferences,$Energy,[hashtable]$Next,[string
         $deviceFresh=$false;if($d.observedAt){$age=([DateTime]::UtcNow-([DateTime]$d.observedAt).ToUniversalTime()).TotalSeconds;$deviceFresh=$age -ge 0 -and $age -le 90}
         $view.Status=if(-not $Hub.Fresh){'? 中枢响应过期'}elseif(-not $d.switch){'○ 只读设备'}elseif(-not $deviceFresh){'? 设备读数未知 / 过期'}elseif($null -eq $d.state){'? 状态未知'}elseif($d.state){'● 已开启 · 状态已读回'}else{'○ 已关闭 · 状态已读回'}
         if(-not $Hub.Config.enabled){$view.Status+=' · 已暂停'}
-        $view.CanControl=$Hub.Config.enabled -and $Hub.Fresh -and [bool]$d.switch
+        $busy=$Script:Workspace -and $Script:Workspace.Tag -and $Script:Workspace.Tag.PendingRequest;$view.Pending=$busy -and $Script:Workspace.Tag.PendingDevice -eq $d.did;$view.Online=$Hub.Fresh -and $deviceFresh;$view.State=if($view.Online -and $null -ne $d.state){[bool]$d.state}else{$null};$view.Kind=if($d.isPlug -or $d.model -match 'plug'){'plug'}elseif($d.model -match 'light|lamp'){'light'}else{'device'}
+        $view.CanControl=$Hub.Config.enabled -and $Hub.Fresh -and [bool]$d.switch -and -not $busy
         $powerFresh=$Energy.ObservedAt -ne [DateTime]::MinValue -and ([DateTime]::UtcNow-$Energy.ObservedAt).TotalSeconds -le 90
-        $view.Details=if($d.computerPower -and $powerFresh -and $null -ne $Energy.Watts){'{0:N1} W · 电脑供电插座' -f $Energy.Watts}elseif($d.computerPower){'电脑供电插座 · 断电需确认'}else{'功率 / 电量未提供'}
+        $view.Details=if($d.computerPower -and $powerFresh -and $null -ne $Energy.Watts){'{0:N1} W · 电脑供电插座' -f $Energy.Watts}elseif($d.computerPower){'电脑供电插座 · 断电需确认'}elseif($d.model -match 'light|lamp'){'灯光'}elseif($d.model -match 'speaker'){'音箱'}elseif($d.isPlug -or $d.model -match 'plug'){'智能插座'}else{'米家设备'}
         $taskTimes=@($Hub.Config.rules|Where-Object {$_.did -eq $d.did -and $Next.ContainsKey($_.id)}|ForEach-Object {$Next[$_.id]}|Sort-Object)
         $holding=@($Hub.Config.rules|Where-Object {$_.did -eq $d.did -and $_.enabled -and $_.mode -eq 'guard' -and $Hub.Status.rules.($_.id).entered -and $Hub.Status.rules.($_.id).active})
         $view.Next=if($holding.Count -and $Hub.Fresh -and $Hub.Config.enabled){'正在保持：'+$holding[0].name}elseif($taskTimes.Count){'下次 '+(Format-EnergyCalendarDate $taskTimes[0] 'MM-dd')+' '+$taskTimes[0].ToString('HH:mm')}else{'暂无待执行任务'};$list.Add($view)

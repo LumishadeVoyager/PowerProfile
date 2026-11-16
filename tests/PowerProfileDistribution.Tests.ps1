@@ -6,6 +6,11 @@ $project=Split-Path -Parent $PSScriptRoot
 function Assert($Name,$Value){if(-not $Value){throw $Name};Write-Host "PASS $Name"}
 function Assert-Throws($Name,[scriptblock]$Action){$failed=$false;try{& $Action}catch{$failed=$true};Assert $Name $failed}
 $tmp=Join-Path ([IO.Path]::GetTempPath()) ('PowerProfileDistribution-'+[Guid]::NewGuid());[void][IO.Directory]::CreateDirectory($tmp)
+# Power writes below are mocked; use a private mutex as well so a running tray
+# cannot block the fixture or be blocked by it. Production synchronization is unchanged.
+$fixtureMutex='Local\PowerProfileDistribution-'+[Guid]::NewGuid()
+$fixtureProtection=(Get-Command Set-CStateProtection).Definition.Replace('Global\PowerProfile_Worker',$fixtureMutex)
+. ([ScriptBlock]::Create('function Set-CStateProtection {'+$fixtureProtection+'}'))
 try {
     # All power operations are mocked. Never modify the testing machine.
     $Script:power=@{scheme='8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c';ac=0;dc=0};$Script:powerWrites=0
@@ -36,6 +41,7 @@ try {
     Assert 'release ZIP has program files and manual' (@($manifest.files).Count -gt 30)
     Assert 'versioned release notes are bundled' (Test-Path (Join-Path $package 'RELEASE_NOTES_1.0.0.md'))
     Assert 'analytics dependencies are bundled' ((Test-Path (Join-Path $package 'PowerProfileGameAnalytics.cs')) -and (Test-Path (Join-Path $package 'PowerProfileInsights.ps1')) -and (Test-Path (Join-Path $package 'PowerProfileInsightsUI.cs')))
+    Assert 'game and device card dependency is bundled' (Test-Path (Join-Path $package 'PowerProfileCards.cs'))
     foreach($private in $privateFiles){Assert "package excludes $private" (-not(Test-Path (Join-Path $package $private)))}
     Assert 'release enables default OTA' ((Get-ProfileUpdateOptions $package).enabled)
     Assert 'source checkout defaults OTA off' (-not (Get-ProfileUpdateOptions $project).enabled)
