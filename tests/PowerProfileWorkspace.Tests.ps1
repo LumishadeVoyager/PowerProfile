@@ -109,6 +109,9 @@ try{
     $w.ClientSize=New-Object Drawing.Size 420,600;[Windows.Forms.Application]::DoEvents();$w.DeviceHost.Reflow()
     Assert 'device cards remain two per row in the narrow portrait window' ($w.DeviceHost.Controls[0].Top -eq $w.DeviceHost.Controls[1].Top -and $w.DeviceHost.Controls[1].Right -le $w.DeviceHost.Width -and $originalCard.Toggle.Right -le $originalCard.Width -and $originalCard.Next.Bottom -lt $originalCard.Schedule.Top)
     $w.ClientSize=New-Object Drawing.Size 540,720
+    $largeDeviceForm=New-Object ProfileWorkspaceForm 150;$largeDeviceForm.ClientSize=New-Object Drawing.Size 540,720;$largeDeviceForm.Show();$largeDeviceForm.Navigate('Devices');$largeDeviceForm.SetDevices([ProfileDeviceView[]]@($w.DeviceHost.Controls|ForEach-Object View));[Windows.Forms.Application]::DoEvents();$largeDeviceForm.DeviceHost.Reflow()
+    Assert '150 percent device cards account for scaled margins and stay two per row' ($largeDeviceForm.DeviceHost.Controls[0].Top -eq $largeDeviceForm.DeviceHost.Controls[1].Top -and $largeDeviceForm.DeviceHost.Controls[1].Right -le $largeDeviceForm.DeviceHost.Width -and $largeDeviceForm.DeviceHost.Controls[0].Status.Height -ge $largeDeviceForm.DeviceHost.Controls[0].Status.Font.Height)
+    $largeDeviceForm.Dispose()
     $switchFixture=New-Object ProfileDeviceCard;$switchFixture.Show();$switchFixture.View=New-Object ProfileDeviceView;$switchFixture.View.Id='test';$switchFixture.View.Name='Fixture';$switchFixture.View.State=$false;$switchFixture.View.Online=$true;$switchFixture.View.CanControl=$true;$switchFixture.Update($switchFixture.View)
     $Script:fixtureDeviceAction='';$switchFixture.add_Command({param($sender,$eventArgs) $Script:fixtureDeviceAction=$eventArgs.Action});$switchFixture.Toggle.PerformClick()
     Assert 'card switch sends explicit intent without optimistic success or changing observed state' ($Script:fixtureDeviceAction -eq 'DeviceOn' -and $switchFixture.Toggle.State -eq $false)
