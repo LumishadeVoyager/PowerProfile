@@ -1,4 +1,4 @@
-param([string]$Source=(Split-Path -Parent $PSScriptRoot),[ValidateRange(10,300)][int]$Samples=60,[string]$Output)
+﻿param([string]$Source=(Split-Path -Parent $PSScriptRoot),[ValidateRange(10,300)][int]$Samples=60,[string]$Output,[switch]$VisiblePaint)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
@@ -16,6 +16,7 @@ try{
     for($i=0;$i -lt 400;$i++){$game=New-Object ProfileGameSession;$game.Id='fixture-'+$i;$game.Name='Fixture game '+($i%8);$game.Start=$today.AddDays(-1-[int][Math]::Floor($i/16)).AddHours($i%16).ToUniversalTime();$game.End=$game.Start.AddMinutes(30);$game.Source='fixture';$Script:perfState.GameSessions.Add($game)}
     $service=[PSCustomObject]@{};$service|Add-Member ScriptMethod GetSnapshot {return $Script:perfState};$service|Add-Member ScriptMethod Dispose {};$service|Add-Member ScriptMethod Refresh {};$Script:EnergyService=$service
     $w=Show-ProfileWorkspace -ReturnForm;$w.Tag.Timer.Stop();$w.Skin.SelectedIndex=0;$w.Motion.Checked=$false;$w.Show();$w.Navigate('Games');$w.GameRange.SelectedIndex=3;Update-ProfileWorkspace;$w.Tag.Suppress=$true
+    if($w.Pages['Games'].ClientSize.Width -lt 400 -or $w.Pages['Games'].ClientSize.Height -lt 500){throw 'Benchmark viewport is not the complete portrait page'}
     $bitmap=New-Object Drawing.Bitmap $w.Width,$w.Height;$rect=New-Object Drawing.Rectangle 0,0,$bitmap.Width,$bitmap.Height
     for($i=0;$i -lt 4;$i++){$w.Navigate('Settings');$w.Navigate('Games');$w.DrawToBitmap($bitmap,$rect)}
     $navigation=@();$render=@();$scroll=@()
@@ -25,7 +26,10 @@ try{
         $sw.Restart();$w.DrawToBitmap($bitmap,$rect);$render+=$sw.Elapsed.TotalMilliseconds
         $w.Pages['Games'].AutoScrollPosition=New-Object Drawing.Point 0,(($i%9)*50);$sw.Restart();$w.DrawToBitmap($bitmap,$rect);$scroll+=$sw.Elapsed.TotalMilliseconds
     }
-    $report=@{workload='400 synthetic sessions / 8 games / 400 calendar days';samples=$Samples;navigation=(Stats $navigation);offscreenFrame=(Stats $render);scrolledOffscreenFrame=(Stats $scroll);frameBudgetMs=25;note='Warm UI-thread and offscreen raster timings, not measured monitor presentation FPS. No physical power or device operations.'}
+    $visible=@();$visibleVerified=$false;if($VisiblePaint){
+        Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class ProfilePerfWindow {[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();}'
+$w.Text='PowerProfile performance test - synthetic data';$w.TopMost=$true;$w.BringToFront();$w.Activate();[Windows.Forms.Application]::DoEvents();$visibleVerified=[ProfilePerfWindow]::GetForegroundWindow() -eq $w.Handle;for($i=0;$i -lt 5;$i++){$w.Refresh();[Windows.Forms.Application]::DoEvents()};for($i=0;$i -lt $Samples;$i++){$sw=[Diagnostics.Stopwatch]::StartNew();$w.Pages['Games'].AutoScrollPosition=New-Object Drawing.Point 0,(($i%9)*50);$w.Refresh();[Windows.Forms.Application]::DoEvents();$visible+=$sw.Elapsed.TotalMilliseconds};$paintScroll=@();for($i=0;$i -lt $Samples;$i++){$sw=[Diagnostics.Stopwatch]::StartNew();$w.Pages['Games'].AutoScrollPosition=New-Object Drawing.Point 0,(($i%9)*50);$w.Pages['Games'].Update();[Windows.Forms.Application]::DoEvents();$paintScroll+=$sw.Elapsed.TotalMilliseconds};$w.TopMost=$false}
+    $report=@{workload='400 synthetic sessions / 8 games / 400 calendar days';samples=$Samples;viewportWidth=$w.Pages['Games'].ClientSize.Width;viewportHeight=$w.Pages['Games'].ClientSize.Height;navigation=(Stats $navigation);offscreenFrame=(Stats $render);scrolledOffscreenFrame=(Stats $scroll);frameBudgetMs=25;visibleWindowVerified=$visibleVerified;visibleScrollProcessing=$(if($paintScroll.Count){Stats $paintScroll}else{$null});visibleWindowRefresh=$(if($visible.Count){Stats $visible}else{$null});note='Warm UI-thread and offscreen raster timings, not measured monitor presentation FPS. No physical power or device operations.'}
     $json=$report|ConvertTo-Json -Depth 5;if($Output){[IO.File]::WriteAllText([IO.Path]::GetFullPath($Output),$json,[Text.UTF8Encoding]::new($false))};$json
 }finally{
     if($bitmap){$bitmap.Dispose()};if($w){$w.Dispose()};if($Script:EnergyService){$Script:EnergyService.Dispose()};if($Script:EnergyLogTimer){$Script:EnergyLogTimer.Dispose()}

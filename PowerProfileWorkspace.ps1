@@ -1,5 +1,5 @@
 ﻿. (Join-Path $PSScriptRoot 'PowerProfileWorkspaceData.ps1')
-if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileCards.cs'),(Join-Path $PSScriptRoot 'PowerProfileSkin.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core}
+if(-not ('ProfileWorkspaceForm' -as [type])){Add-Type -Path @((Join-Path $PSScriptRoot 'PowerProfileWorkspace.cs'),(Join-Path $PSScriptRoot 'PowerProfileCards.cs'),(Join-Path $PSScriptRoot 'PowerProfileSkin.cs'),(Join-Path $PSScriptRoot 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core,Accessibility}
 . (Join-Path $PSScriptRoot 'PowerProfileInsights.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileWorkspaceAsync.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileConnectionUI.ps1')

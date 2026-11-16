@@ -47,16 +47,18 @@ public static class ProfileSkin {
     }
     static void Glow(Graphics g,RectangleF bounds,Color color){using(var path=new GraphicsPath()){path.AddEllipse(bounds);using(var brush=new PathGradientBrush(path)){brush.CenterColor=color;brush.SurroundColors=new[]{Color.FromArgb(0,color)};g.FillPath(brush,path);}}}
     public static void Canvas(Control c,Graphics g){
+        var saved=g.Save();try{g.SetClip(c.ClientRectangle,CombineMode.Intersect);
         if(!Liquid){g.Clear(c.BackColor.A==255?c.BackColor:ProfileTheme.Background);return;}
         var f=c as Form??c.FindForm();if(f==null){g.Clear(ProfileTheme.Background);return;}var origin=Origin(c,f);g.DrawImageUnscaled(SceneFor(f),-origin.X,-origin.Y);
         // Reconstruct ancestor glass at the child's coordinates, so transparent rows
         // and buttons do not cut rectangular holes into a containing glass card.
         var parents=new List<Control>();for(Control at=c.Parent;at!=null&&at!=f;at=at.Parent)if(at is ProfileSurface||at is GroupBox)parents.Add(at);
         parents.Reverse();foreach(var at in parents){var p=Origin(at,f);int inset=at is GroupBox?8:0;Coat(g,new RectangleF(p.X-origin.X+.5f,p.Y-origin.Y+inset+.5f,at.Width-1,at.Height-inset-1),18,false);}
+        }finally{g.Restore(saved);}
     }
-    public static void Glass(Control c,Graphics g,RectangleF bounds,float radius,bool selected){
+    public static void Glass(Control c,Graphics g,RectangleF bounds,float radius,bool selected,bool backgroundReady=false){
         if(bounds.Width<2||bounds.Height<2)return;g.SmoothingMode=SmoothingMode.AntiAlias;
-        var saved=g.Save();using(var clip=ProfileMotion.Round(bounds,radius)){g.SetClip(clip,CombineMode.Intersect);Canvas(c,g);}g.Restore(saved);Coat(g,bounds,radius,selected);
+        if(!backgroundReady){var saved=g.Save();using(var clip=ProfileMotion.Round(bounds,radius)){g.SetClip(clip,CombineMode.Intersect);Canvas(c,g);}g.Restore(saved);}Coat(g,bounds,radius,selected);
     }
     static void Coat(Graphics g,RectangleF bounds,float radius,bool selected){
         if(bounds.Width<2||bounds.Height<2)return;
@@ -86,7 +88,7 @@ public static class ProfileSkin {
         }
         using(var inner=ProfileMotion.Round(new RectangleF(bounds.X+1.8f,bounds.Y+1.8f,Math.Max(1,bounds.Width-3.6f),Math.Max(1,bounds.Height-3.6f)),Math.Max(2,radius-1)))using(var pen=new Pen(ProfileTheme.Dark?Color.FromArgb(22,Color.White):Color.FromArgb(22,51,92,143)))g.DrawPath(pen,inner);
     }
-    public static void Plot(Control c,Graphics g){if(Liquid){Glass(c,g,new RectangleF(.5f,.5f,c.Width-1,c.Height-1),16,false);}else g.Clear(c.BackColor);}
+    public static void Plot(Control c,Graphics g){if(Liquid){Canvas(c,g);Glass(c,g,new RectangleF(.5f,.5f,c.Width-1,c.Height-1),16,false,true);}else g.Clear(c.BackColor);}
     static void PanelPaint(object sender,PaintEventArgs e){if(Liquid)Canvas((Control)sender,e.Graphics);}
     static void ButtonPaint(object sender,PaintEventArgs e){if(!Liquid)return;var b=(Button)sender;Canvas(b,e.Graphics);Glass(b,e.Graphics,new RectangleF(.5f,.5f,b.Width-1,b.Height-1),Math.Min(18,b.Height/2),b.Focused);TextRenderer.DrawText(e.Graphics,b.Text,b.Font,b.ClientRectangle,b.Enabled?ProfileTheme.Text:ProfileTheme.Muted,TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.EndEllipsis);if(b.Focused)ControlPaint.DrawFocusRectangle(e.Graphics,Rectangle.Inflate(b.ClientRectangle,-5,-5));}
     static void CellPaint(object sender,DataGridViewCellPaintingEventArgs e){
@@ -126,6 +128,7 @@ public static class ProfileSkin {
 public sealed class ProfileSkinPanel : Panel {
     readonly Timer scrollTimer=new Timer{Interval=15};double scrollTarget;bool stepping;
     public bool ScrollAnimating {get{return scrollTimer.Enabled;}}
+    public void CancelScrollAnimation(){scrollTimer.Stop();}
     public ProfileSkinPanel(){DoubleBuffered=true;scrollTimer.Tick+=(s,e)=>{
         if(!Visible||!ProfileMotion.Allowed){scrollTimer.Stop();return;}int current=-AutoScrollPosition.Y,max=Math.Max(0,VerticalScroll.Maximum-VerticalScroll.LargeChange+1);scrollTarget=Math.Max(0,Math.Min(max,scrollTarget));double distance=scrollTarget-current;int next=Math.Abs(distance)<2?(int)scrollTarget:current+(int)(Math.Sign(distance)*Math.Max(1,Math.Ceiling(Math.Abs(distance)*.45)));
         stepping=true;try{AutoScrollPosition=new Point(-AutoScrollPosition.X,next);}finally{stepping=false;}if(next==(int)scrollTarget||next==current)scrollTimer.Stop();

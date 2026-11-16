@@ -100,20 +100,23 @@ public sealed class ProfileSteamArtwork {
 }
 
 public sealed class ProfileGameCard : ProfileSurface {
+    internal Control RenderOwner;internal bool VirtualFocus;
     public ProfileGameView View;public bool Selected;public string AppId;public ProfileSteamArtwork Artwork;
     Bitmap cover,raster;bool requested;readonly ProfileHoverTip tip;int contentVersion,rasterVersion=-1,rasterSkin=-1;Size rasterSize;Font rasterFont;bool rasterSelected,rasterFocused;
     public ProfileGameCard(){SetStyle(ControlStyles.Selectable,true);Height=224;Padding=Padding.Empty;TabStop=true;Cursor=Cursors.Hand;AccessibleRole=AccessibleRole.PushButton;tip=new ProfileHoverTip(this);}
     public void Update(ProfileGameView view){if(View!=null&&View.Name==view.Name&&View.Duration==view.Duration&&View.Recent==view.Recent&&View.Detail==view.Detail&&View.Sessions==view.Sessions)return;contentVersion++;View=view;AccessibleName=view.Name;AccessibleDescription=view.Duration+" · "+view.Sessions+" 个片段；按 Enter 查看会话";tip.Update(view.Detail);Invalidate();}
     protected override void OnVisibleChanged(EventArgs e){base.OnVisibleChanged(e);RequestCover();}
     protected override void OnHandleCreated(EventArgs e){base.OnHandleCreated(e);RequestCover();}
-    void RequestCover(){if(requested||!Visible||Artwork==null||View==null||!IsHandleCreated)return;requested=true;Artwork.Request(View.Name,this,(image,id)=>{cover=image;AppId=id;contentVersion++;Invalidate();});}
+    void RequestCover(){var owner=RenderOwner??this;if(requested||!owner.Visible||Artwork==null||View==null||!owner.IsHandleCreated)return;requested=true;Artwork.Request(View.Name,owner,(image,id)=>{if(IsDisposed){if(image!=null)image.Dispose();return;}cover=image;AppId=id;contentVersion++;if(RenderOwner!=null)RenderOwner.Invalidate(Bounds);else Invalidate();});}
+    internal void Render(Graphics graphics){var e=new PaintEventArgs(graphics,ClientRectangle);OnPaintBackground(e);OnPaint(e);}
+    internal void ActivateCard(){OnClick(EventArgs.Empty);}
     protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){OnClick(EventArgs.Empty);e.Handled=true;}}
     protected override void OnPaintBackground(PaintEventArgs e){
-        RequestCover();if(raster==null||rasterSize!=Size||rasterVersion!=contentVersion||rasterSkin!=ProfileSkin.Revision||rasterFont!=Font||rasterSelected!=Selected||rasterFocused!=Focused){
-            if(raster!=null)raster.Dispose();rasterSize=Size;rasterVersion=contentVersion;rasterSkin=ProfileSkin.Revision;rasterFont=Font;rasterSelected=Selected;rasterFocused=Focused;
+        RequestCover();if(raster==null||rasterSize!=Size||rasterVersion!=contentVersion||rasterSkin!=ProfileSkin.Revision||rasterFont!=Font||rasterSelected!=Selected||rasterFocused!=(Focused||VirtualFocus)){
+            if(raster!=null)raster.Dispose();rasterSize=Size;rasterVersion=contentVersion;rasterSkin=ProfileSkin.Revision;rasterFont=Font;rasterSelected=Selected;rasterFocused=Focused||VirtualFocus;
             raster=new Bitmap(Math.Max(1,Width),Math.Max(1,Height),System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-            using(var g=Graphics.FromImage(raster)){var paint=new PaintEventArgs(g,new Rectangle(Point.Empty,Size));base.OnPaintBackground(paint);PaintContents(paint);}
-        }e.Graphics.DrawImageUnscaled(raster,0,0);
+            using(var g=Graphics.FromImage(raster))using(var clip=ProfileMotion.Round(new RectangleF(.5f,.5f,Width-1,Height-1),ProfileSkin.Liquid?18:12)){g.SetClip(clip);var paint=new PaintEventArgs(g,new Rectangle(Point.Empty,Size));base.OnPaintBackground(paint);PaintContents(paint);}
+        }if(ProfileSkin.Liquid)ProfileSkin.Canvas(this,e.Graphics);else e.Graphics.Clear(Parent==null?ProfileTheme.Background:Parent.BackColor);e.Graphics.DrawImageUnscaled(raster,0,0);
     }
     protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);}
     void PaintContents(PaintEventArgs e){
@@ -124,13 +127,55 @@ public sealed class ProfileGameCard : ProfileSurface {
             else{using(var brush=new LinearGradientBrush(new Rectangle(0,0,Width,top),Color.FromArgb(33,62,93),Color.FromArgb(85,72,125),35))g.FillRectangle(brush,0,0,Width,top);using(var p=new Pen(Color.FromArgb(90,200,222,255),2*f)){g.DrawEllipse(p,Width/2-24*f,top/2-18*f,48*f,32*f);g.DrawLine(p,Width/2-15*f,top/2-2*f,Width/2-3*f,top/2-2*f);g.DrawLine(p,Width/2-9*f,top/2-8*f,Width/2-9*f,top/2+4*f);g.DrawEllipse(p,Width/2+7*f,top/2-5*f,4*f,4*f);} }
             g.Restore(saved);
         }
-        using(var title=new Font(Font.FontFamily,10*f,FontStyle.Bold))TextRenderer.DrawText(g,View.Name,title,new Rectangle(pad,top+(int)(8*f),Width-pad*2,(int)(36*f)),ProfileTheme.Text,TextFormatFlags.WordBreak|TextFormatFlags.EndEllipsis);
-        using(var value=new Font(Font.FontFamily,16*f,FontStyle.Bold))TextRenderer.DrawText(g,View.Duration,value,new Rectangle(pad,top+(int)(46*f),Width-pad*2,(int)(30*f)),ProfileTheme.Text,TextFormatFlags.EndEllipsis);
-        TextRenderer.DrawText(g,View.Recent??"",Font,new Rectangle(pad,top+(int)(80*f),Width-pad*2,(int)(20*f)),ProfileTheme.Muted,TextFormatFlags.EndEllipsis);
-        if(Selected||Focused){using(var path=ProfileMotion.Round(new RectangleF(1,1,Width-3,Height-3),16))using(var pen=new Pen(ProfileTheme.Accent,2))g.DrawPath(pen,path);}
-        if(Focused&&ShowFocusCues)ControlPaint.DrawFocusRectangle(g,new Rectangle(5,5,Width-10,Height-10));
+        g.TextRenderingHint=System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using(var title=new Font(Font.FontFamily,10*f,FontStyle.Bold))using(var brush=new SolidBrush(ProfileTheme.Text))using(var format=new StringFormat{Trimming=StringTrimming.EllipsisCharacter,FormatFlags=StringFormatFlags.LineLimit})g.DrawString(View.Name,title,brush,new RectangleF(pad,top+8*f,Width-pad*2,36*f),format);
+        using(var value=new Font(Font.FontFamily,16*f,FontStyle.Bold))using(var brush=new SolidBrush(ProfileTheme.Text))using(var format=new StringFormat{Trimming=StringTrimming.EllipsisCharacter,FormatFlags=StringFormatFlags.NoWrap})g.DrawString(View.Duration,value,brush,new RectangleF(pad,top+46*f,Width-pad*2,30*f),format);
+        using(var brush=new SolidBrush(ProfileTheme.Muted))using(var format=new StringFormat{Trimming=StringTrimming.EllipsisCharacter,FormatFlags=StringFormatFlags.NoWrap})g.DrawString(View.Recent??"",Font,brush,new RectangleF(pad,top+80*f,Width-pad*2,20*f),format);
+        if(Selected||Focused||VirtualFocus){using(var path=ProfileMotion.Round(new RectangleF(1,1,Width-3,Height-3),16))using(var pen=new Pen(ProfileTheme.Accent,2))g.DrawPath(pen,path);}
+        if((Focused&&ShowFocusCues)||VirtualFocus)ControlPaint.DrawFocusRectangle(g,new Rectangle(5,5,Width-10,Height-10));
     }
     protected override void Dispose(bool disposing){if(disposing){tip.Dispose();if(cover!=null)cover.Dispose();if(raster!=null)raster.Dispose();}base.Dispose(disposing);}
+}
+
+// One native canvas for the game library. Cards remain reusable data/render
+// objects; offscreen cards have no visible HWND and are never painted.
+public sealed class ProfileGameGallery : Control {
+    public int ItemWidth=200,MaximumColumns=2;bool laying;int focusIndex;readonly ProfileHoverTip tip;
+    ProfileGameCard[] Cards {get{return Controls.OfType<ProfileGameCard>().ToArray();}}
+    public ProfileGameGallery(){SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.Selectable,true);TabStop=true;Margin=Padding.Empty;tip=new ProfileHoverTip(this);AccessibleRole=AccessibleRole.List;AccessibleName="游戏卡片";}
+    protected override void OnSizeChanged(EventArgs e){base.OnSizeChanged(e);Reflow();}
+    protected override void OnControlAdded(ControlEventArgs e){base.OnControlAdded(e);var card=e.Control as ProfileGameCard;if(card!=null){card.Visible=false;card.RenderOwner=this;}Reflow();}
+    public void Reflow(){if(laying||Width<1)return;laying=true;try{var cards=Cards;int columns=Math.Max(1,Math.Min(MaximumColumns,Width/(ItemWidth+10)));int y=0;for(int i=0;i<cards.Length;i+=columns){int rowHeight=0;for(int c=0;c<columns&&i+c<cards.Length;c++){var card=cards[i+c];card.SetBounds(c*Width/columns,y,Math.Max(100,Width/columns-card.Margin.Horizontal),card.Height);rowHeight=Math.Max(rowHeight,card.Height+card.Margin.Vertical);}y+=rowHeight;}int height=cards.Length==0?Math.Max(30,Font.Height+12):y;if(Height!=height)Height=height;focusIndex=Math.Max(0,Math.Min(focusIndex,cards.Length-1));Invalidate();}finally{laying=false;}}
+    protected override void OnPaintBackground(PaintEventArgs e){if(ProfileSkin.Liquid)ProfileSkin.Canvas(this,e.Graphics);else e.Graphics.Clear(Parent==null?ProfileTheme.Background:Parent.BackColor);}
+    protected override void OnPaint(PaintEventArgs e){base.OnPaint(e);var cards=Cards;for(int i=0;i<cards.Length;i++){var card=cards[i];if(!e.ClipRectangle.IntersectsWith(card.Bounds))continue;card.VirtualFocus=Focused&&ShowFocusCues&&focusIndex==i;var state=e.Graphics.Save();e.Graphics.TranslateTransform(card.Left,card.Top);card.Render(e.Graphics);e.Graphics.Restore(state);}}
+    int Hit(Point point){var cards=Cards;for(int i=0;i<cards.Length;i++)if(cards[i].Bounds.Contains(point))return i;return -1;}
+    ProfileSkinPanel ScrollPage(){for(Control c=Parent;c!=null;c=c.Parent){var page=c as ProfileSkinPanel;if(page!=null&&page.AutoScroll)return page;}return null;}
+    protected override void OnMouseMove(MouseEventArgs e){base.OnMouseMove(e);int index=Hit(e.Location);Cursor=index>=0?Cursors.Hand:Cursors.Default;tip.Update(index>=0?Cards[index].AccessibleDescription:"");}
+    protected override void OnMouseDown(MouseEventArgs e){base.OnMouseDown(e);var page=ScrollPage();if(page!=null)page.CancelScrollAnimation();int index=Hit(e.Location);if(index>=0){focusIndex=index;Focus();Invalidate();}}
+    protected override void OnMouseClick(MouseEventArgs e){base.OnMouseClick(e);int index=Hit(e.Location);if(e.Button==MouseButtons.Left&&index>=0)Cards[index].ActivateCard();}
+    protected override bool IsInputKey(Keys key){return key==Keys.Left||key==Keys.Right||key==Keys.Up||key==Keys.Down||key==Keys.Enter||key==Keys.Space||base.IsInputKey(key);}
+    protected override void OnKeyDown(KeyEventArgs e){base.OnKeyDown(e);var cards=Cards;if(cards.Length==0)return;int columns=Math.Max(1,Math.Min(MaximumColumns,Width/(ItemWidth+10))),step=0;if(e.KeyCode==Keys.Left)step=-1;if(e.KeyCode==Keys.Right)step=1;if(e.KeyCode==Keys.Up)step=-columns;if(e.KeyCode==Keys.Down)step=columns;if(step!=0){focusIndex=Math.Max(0,Math.Min(cards.Length-1,focusIndex+step));var page=ScrollPage();if(page!=null){page.CancelScrollAnimation();var bounds=RectangleToScreen(cards[focusIndex].Bounds);var viewport=page.RectangleToScreen(page.ClientRectangle);int dy=bounds.Top<viewport.Top?bounds.Top-viewport.Top:bounds.Bottom>viewport.Bottom?bounds.Bottom-viewport.Bottom:0;if(dy!=0)page.AutoScrollPosition=new Point(-page.AutoScrollPosition.X,Math.Max(0,-page.AutoScrollPosition.Y+dy));}Invalidate();e.Handled=true;}if(e.KeyCode==Keys.Enter||e.KeyCode==Keys.Space){cards[focusIndex].ActivateCard();e.Handled=true;}}
+    protected override void OnGotFocus(EventArgs e){base.OnGotFocus(e);Invalidate();}
+    protected override void OnLostFocus(EventArgs e){base.OnLostFocus(e);Invalidate();}
+    protected override AccessibleObject CreateAccessibilityInstance(){return new GalleryAccessibility(this);}
+    sealed class GalleryAccessibility : ControlAccessibleObject {
+        readonly ProfileGameGallery owner;public GalleryAccessibility(ProfileGameGallery owner):base(owner){this.owner=owner;}
+        public override int GetChildCount(){return owner.Cards.Length;}
+        public override AccessibleObject GetChild(int index){return index>=0&&index<owner.Cards.Length?new CardAccessibility(owner,index):null;}
+    }
+    sealed class CardAccessibility : AccessibleObject {
+        readonly ProfileGameGallery owner;readonly int index;ProfileGameCard Card {get{return index<owner.Cards.Length?owner.Cards[index]:null;}}
+        public CardAccessibility(ProfileGameGallery owner,int index){this.owner=owner;this.index=index;}
+        public override string Name {get{return Card==null?"":Card.AccessibleName;}set{}}
+        public override string Description {get{return Card==null?"":Card.AccessibleDescription;}}
+        public override AccessibleRole Role {get{return AccessibleRole.PushButton;}}
+        public override AccessibleObject Parent {get{return owner.AccessibilityObject;}}
+        public override Rectangle Bounds {get{return Card==null?Rectangle.Empty:owner.RectangleToScreen(Card.Bounds);}}
+        public override string DefaultAction {get{return "查看会话";}}
+        public override AccessibleStates State {get{return AccessibleStates.Focusable|AccessibleStates.Selectable|(Card!=null&&Card.Selected?AccessibleStates.Selected:AccessibleStates.None);}}
+        public override void DoDefaultAction(){if(Card==null||owner.IsDisposed)return;if(owner.InvokeRequired)owner.BeginInvoke((Action)(()=>{if(Card!=null)Card.ActivateCard();}));else Card.ActivateCard();}
+    }
+    protected override void Dispose(bool disposing){if(disposing)tip.Dispose();base.Dispose(disposing);}
 }
 
 public sealed class ProfilePowerToggle : Button {

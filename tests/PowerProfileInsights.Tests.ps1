@@ -6,7 +6,7 @@ $ScriptDir=$root
 function Assert($Name,$Value){if(-not $Value){throw $Name};Write-Host "PASS $Name"}
 try{
     . (Join-Path $project 'PowerProfileEnergyUI.ps1');Initialize-EnergyService;$Script:EnergyService.Dispose();$Script:EnergyLogTimer.Stop()
-    Add-Type -Path @((Join-Path $project 'PowerProfileWorkspace.cs'),(Join-Path $project 'PowerProfileCards.cs'),(Join-Path $project 'PowerProfileSkin.cs'),(Join-Path $project 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core
+    Add-Type -Path @((Join-Path $project 'PowerProfileWorkspace.cs'),(Join-Path $project 'PowerProfileCards.cs'),(Join-Path $project 'PowerProfileSkin.cs'),(Join-Path $project 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core,Accessibility
     . (Join-Path $project 'PowerProfileWorkspaceData.ps1');. (Join-Path $project 'PowerProfileWorkspaceAsync.ps1');. (Join-Path $project 'PowerProfileInsights.ps1')
     $state=New-Object ProfileEnergySnapshot;$state.LocalDay='2026-11-15';$state.Price=[decimal]0.7
     foreach($entry in @(@('2026-11-15',100),@('2026-11-14',0),@('2026-11-13',3600),@('2026-11-06',7200))){$u=New-Object ProfileEnergyDay;$u.Seconds=$entry[1];$u.GameSeconds=0;$u.HighPowerSeconds=0;$state.UsageDays.Add($entry[0],$u);$d=New-Object ProfileEnergyDay;$d.KWh=$entry[1]/3600;$d.Source='MiHome';$state.Days.Add($entry[0],$d)}
@@ -90,6 +90,12 @@ try{
     Assert 'games are cover cards with original totals available on demand' ($w.GameHost.Controls.Count -eq 1 -and $w.GameHost.Controls[0] -is [ProfileGameCard] -and $w.GameHost.Controls[0].View.Name -eq 'NBA 2K26' -and -not $w.Sections['GameTable'].Expanded)
     $originalGame=$w.GameHost.Controls[0];Update-WorkspaceGames $state;Assert 'game refresh reuses artwork cards and preserves statistics' ([object]::ReferenceEquals($originalGame,$w.GameHost.Controls[0]) -and $w.GameHost.Controls[0].View.Sessions -eq 2)
     $w.SelectGame('NBA 2K26',$true);Assert 'selecting a game highlights its card and reveals sessions' ($w.SelectedGame -eq 'NBA 2K26' -and $w.GameHost.Controls[0].Selected -and $w.Sections['GameSessions'].Expanded)
+    $w.Navigate('Games');$w.SelectGame('',$false);$accessible=$w.GameHost.AccessibilityObject.GetChild(0)
+    Assert 'single-canvas gallery exposes each game as an accessible action' ($w.GameHost.AccessibilityObject.GetChildCount() -eq 1 -and $accessible.Name -eq 'NBA 2K26')
+    $Script:galleryInvalidations=0;$w.GameHost.add_Invalidated({$Script:galleryInvalidations++})
+    $accessible.DoDefaultAction();Assert 'accessible game action selects the matching sessions' ($w.SelectedGame -eq 'NBA 2K26')
+    Assert 'virtual card selection invalidates the visible gallery' ($Script:galleryInvalidations -gt 0)
+    Assert 'game cards render through the gallery without individual native windows' (-not $w.GameHost.Controls[0].IsHandleCreated)
     $steamFixture=Join-Path $root 'steam';[void][IO.Directory]::CreateDirectory((Join-Path $steamFixture 'steamapps'))
     [IO.File]::WriteAllText((Join-Path $steamFixture 'steamapps/appmanifest_1.acf'),'"AppState" { "appid" "12345" "name" "NBA 2K26" }')
     [IO.File]::WriteAllText((Join-Path $steamFixture 'steamapps/appmanifest_2.acf'),'"AppState" { "appid" "../invalid" "name" "Other game" }')
@@ -97,7 +103,7 @@ try{
     $header=[ProfileSteamArtwork]::HeaderUrl('{"header_image":"https:\/\/shared.akamai.steamstatic.com\/store_item_assets\/steam\/apps\/12345\/hash\/header_schinese.jpg"}','12345');Assert 'hashed localized Steam covers resolve from public app metadata' ($header -eq 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/12345/hash/header_schinese.jpg')
     $rejected=$false;try{[void][ProfileSteamArtwork]::HeaderUrl('{"header_image":"https://unrelated.example/steam/apps/12345/header.jpg"}','12345')}catch{$rejected=$true};Assert 'artwork metadata cannot redirect downloads to arbitrary hosts' $rejected
     $library=New-Object 'Collections.Generic.List[ProfileGameView]';for($i=0;$i -lt 8;$i++){$v=New-Object ProfileGameView;$v.Name='Fixture game '+$i;$v.Duration='1 小时';$v.Recent='最近 2026-11-14 周六';$library.Add($v)}
-    $w.Navigate('Games');$w.SetGameCards($library.ToArray());Assert 'large game libraries start with six cards and can expand without losing totals' ($w.GameHost.Controls.Count -eq 6 -and $w.GameLibraryMore.Visible -and $w.GameHost.Controls[0].CanSelect)
+    $w.Navigate('Games');$w.SetGameCards($library.ToArray());Assert 'large game libraries start with six cards and can expand without losing totals' ($w.GameHost.Controls.Count -eq 6 -and $w.GameLibraryMore.Visible -and $w.GameHost.CanSelect)
     $firstCard=$w.GameHost.Controls[0];$w.GameLibraryMore.PerformClick();Assert 'expanding library reuses existing cards and shows the remaining games' ($w.GameHost.Controls.Count -eq 8 -and [object]::ReferenceEquals($firstCard,$w.GameHost.Controls[0]))
 }finally{
     if($w){$w.Dispose()};if($Script:EnergyService){$Script:EnergyService.Dispose()};if($Script:EnergyLogTimer){$Script:EnergyLogTimer.Dispose()}

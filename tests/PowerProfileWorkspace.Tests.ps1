@@ -33,6 +33,7 @@ try{
     $w=Show-ProfileWorkspace -ReturnForm;$w.Tag.Timer.Stop();$w.Show();[Windows.Forms.Application]::DoEvents()
     Assert 'all seven modules are in one native window' ($w.Pages.Count -eq 7 -and $w.Navigation.Count -eq 7)
     Assert 'default workspace uses a light portrait canvas' ($w.ClientSize.Width -le 540 -and [Math]::Abs($w.ClientSize.Width/$w.ClientSize.Height-0.75) -lt 0.01)
+    $w.Tag.Suppress=$true;foreach($pageName in $w.Pages.Keys){$w.Navigate($pageName);Assert ('page fills the content viewport on first navigation: '+$pageName) ($w.Pages[$pageName].ClientSize.Width -ge $w.ClientSize.Width*.8 -and $w.Pages[$pageName].ClientSize.Height -ge $w.ClientSize.Height*.6)};$w.Tag.Suppress=$false;$w.Navigate('Overview')
     Assert 'all destinations fit across top navigation' ($w.Navigation['Overview'].Parent -eq $w.NavigationStrip -and $w.Navigation['Settings'].Right -le $w.NavigationStrip.Width)
     Assert 'long explanations and filters start collapsed' (-not $w.Sections['Runtime'].Expanded -and -not $w.Sections['EnergyFilters'].Expanded -and -not $w.Sections['GameEvidence'].Expanded)
     Assert 'actual fee and power appear in overview' ($w.Metrics['cost'].Value.Text -eq '¥0.35' -and $w.Metrics['power'].Value.Text -eq '82.0 W')
