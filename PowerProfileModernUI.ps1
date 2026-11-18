@@ -164,7 +164,7 @@ function Update-ModernDashboard {
     $fields.uptime.Text="$(if($uptime.Days){"$($uptime.Days) 天 "})$($uptime.Hours) 小时 $($uptime.Minutes) 分钟"
     $fields.plan.Text='附加省电：等待检测'
     try{
-        $ws=Read-AtomicJson (Join-Path $ScriptDir 'workstation_state.json')
+        $ws=Read-WorkstationState (Join-Path $ScriptDir 'workstation_state.json') -ReadOnly
         $age=([DateTime]::UtcNow-([DateTime]$ws.observedAt).ToUniversalTime()).TotalSeconds
         $fields.plan.Text=if($age -gt 45){'附加省电：检测过期，等待恢复检查'}else{"附加省电：$(if($ws.active){'已生效'}else{'未生效'}) · $($ws.reason)"}
         if($ws.active -and $mode -eq 'Idle'){

@@ -67,7 +67,16 @@ public static class ProfileSnapshotIO
                 try { held = mutex.WaitOne(3000); }
                 catch (AbandonedMutexException) { held = true; }
                 if (!held) throw new IOException("Snapshot writer timeout: " + path);
-                File.WriteAllText(temporary, json, new UTF8Encoding(true));
+                // Persist the complete temporary snapshot before publishing its name.
+                using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    var encoding = new UTF8Encoding(true);
+                    byte[] preamble = encoding.GetPreamble();
+                    stream.Write(preamble, 0, preamble.Length);
+                    byte[] bytes = encoding.GetBytes(json);
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(true);
+                }
                 for (int attempt = 0; ; attempt++)
                 {
                     try

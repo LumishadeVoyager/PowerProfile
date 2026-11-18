@@ -164,11 +164,31 @@ function Get-WorkstationScheme {
     if(-not $scheme){throw 'Cannot read active scheme'}
     return $scheme
 }
+function Read-WorkstationState {
+    param([string]$Path, [switch]$ReadOnly)
+    if(-not (Test-Path -LiteralPath $Path)){return $null}
+    # Keep I/O failures visible; only invalid disposable state can be rebuilt.
+    Initialize-SnapshotIO
+    $raw=[ProfileSnapshotIO]::Read($Path)
+    try {
+        $state=ConvertFrom-Json -InputObject $raw -ErrorAction Stop
+        if(-not $state -or $state.active -isnot [bool]){throw 'Invalid workstation state'}
+        return $state
+    } catch {
+        if($ReadOnly){return $null}
+        $backup=$Path+'.corrupt-'+[Guid]::NewGuid().ToString('N')
+        Copy-Item -LiteralPath $Path -Destination $backup -ErrorAction Stop
+        $state=[PSCustomObject]@{active=$false;reason='损坏状态已重建，等待重新评估';observedAt=[DateTime]::UtcNow.ToString('o')}
+        Write-AtomicJson $Path $state
+        Write-ProfileEvent 'workstation.state.recovered' '状态文件损坏，已备份并重建；继续应用基础档位' -Level WARN -Data @{path=$Path;backup=$backup;error=$_.Exception.Message}
+        return $state
+    }
+}
 function Restore-WorkstationOverlay {
     param([string]$Root,[string]$Reason='恢复原参数')
     $path=Join-Path $Root 'workstation_state.json'
     if(-not (Test-Path -LiteralPath $path)){return}
-    $state=Read-AtomicJson $path
+    $state=Read-WorkstationState $path
     if(-not $state.active){return}
     if($state.baseline.scheme -notmatch '^[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'){throw 'Invalid recovery scheme'}
     Write-ProfileEvent 'workstation.restore.start' $Reason -Data @{enteredBy=$state.operationId;baseline=$state.baseline}
@@ -191,7 +211,7 @@ function Invoke-WorkstationEvaluation {
     param([string]$Root,[string]$CurrentMode,$DetectionOptions)
     $path=Join-Path $Root 'workstation_state.json'
     $previous=$null
-    if(Test-Path $path){$previous=Read-AtomicJson $path}
+    if(Test-Path $path){$previous=Read-WorkstationState $path}
     $json=Read-AtomicJson (Join-Path $Root 'settings.json')
     $options=Get-WorkstationOptions $json
     $now=Get-BeijingTime

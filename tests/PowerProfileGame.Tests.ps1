@@ -1,5 +1,6 @@
 ﻿$ErrorActionPreference='Stop'
 $project=Split-Path -Parent $PSScriptRoot
+. (Join-Path $project 'PowerProfileDisplay.ps1')
 function Assert-Equal($Name,$Actual,$Expected){if($Actual -ne $Expected){throw "$Name expected $Expected got $Actual"};Write-Host "PASS $Name"}
 $script:ProfileFixtureRoot=Join-Path ([IO.Path]::GetTempPath()) ('PowerProfileGameTests-'+[Guid]::NewGuid())
 [void][IO.Directory]::CreateDirectory($script:ProfileFixtureRoot)

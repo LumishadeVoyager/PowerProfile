@@ -12,6 +12,7 @@ $DetectionScript = Join-Path $ScriptDir 'PowerProfileDetection.ps1'
 . $DetectionScript
 . (Join-Path $ScriptDir 'PowerProfileLog.ps1')
 . (Join-Path $ScriptDir 'PowerProfileWorkstation.ps1')
+. (Join-Path $ScriptDir 'PowerProfileDisplay.ps1')
 Initialize-ProfileLogging $ScriptDir 'tray'
 
 function Write-LifecycleLog {
@@ -1013,6 +1014,17 @@ $menuStatus = $menu.Items.Add('当前: ...')
 $menuStatus.Enabled = $false
 
 $menuSettings = $menu.Items.Add('设置...')
+$menuDisplay=$menu.Items.Add('无操作 15 分钟自动熄屏（保持运行）')
+$menuDisplay.Add_Click({
+    try {
+        $options=Get-DisplayOptions $ScriptDir
+        $options.enabled=-not $options.enabled
+        Write-AtomicJson (Join-Path $ScriptDir 'display.settings.json') $options -Pretty
+    }catch{Write-ProfileEvent 'display.settings.failed' $_.Exception.Message 'ERROR'}
+})
+$menu.Add_Opening({
+    try{$options=Get-DisplayOptions $ScriptDir;$menuDisplay.Checked=$options.enabled;$menuDisplay.Text="无操作 $($options.idleMinutes) 分钟自动熄屏（保持运行）"}catch{}
+})
 $menuSettings.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(96, 125, 139))
 
 $menuMonitor=New-Object Windows.Forms.ToolStripMenuItem('运行状态...')
@@ -1214,9 +1226,10 @@ $Script:WorkstationTimer.Interval=1000
 $Script:LastWorkstationCheck=[DateTime]::MinValue
 $Script:WorkstationTimer.Add_Tick({
     try {
+        if($Script:DisplayIsOff){return}
         $active=$false
         $wsPath=Join-Path $ScriptDir 'workstation_state.json'
-        if(Test-Path $wsPath){$active=[bool](Read-AtomicJson $wsPath).active}
+        if(Test-Path $wsPath){$active=[bool](Read-WorkstationState $wsPath -ReadOnly).active}
         $options=Get-WorkstationOptions (Read-AtomicJson $SettingsPath)
         $blocked=(-not $options.enabled -or -not $options.scheduleValid -or (Get-UserActivityIdleSeconds) -lt $options.awayMinutes*60 -or -not (Get-AutoEnabled) -or (Get-CurrentMode) -ne 'Idle')
         if($active -and $blocked){Invoke-WorkstationWorker -Restore -RestoreReason '输入或用户配置变化，退出附加省电';return}
@@ -1233,6 +1246,8 @@ $Script:WorkstationTimer.Start()
 $Script:AutoTimer = New-Object System.Windows.Forms.Timer
 $Script:AutoTimer.Interval = $Script:Settings.autoIntervalSec * 1000
 $Script:AutoTimer.Add_Tick({
+    # Preserve background workload performance while the screen policy is active.
+    if($Script:DisplayIsOff){return}
     $dbg = Join-Path $ScriptDir 'unlock_debug.log'
     $auto = Get-AutoEnabled
     $idleSec = Get-EffectiveIdle   # 全屏游戏时返回 0, 避免手柄玩游戏被误判 idle
@@ -1288,4 +1303,84 @@ Write-AtomicJson (Join-Path $ScriptDir 'tray_ready.json') @{processId=$PID;versi
 Write-LifecycleLog '[READY] Modern tray UI initialized'
 Initialize-ProfileDistribution
 
-[System.Windows.Forms.Application]::Run()
+# Separate one-second input policy; fullscreen/game detection does not mask inactivity.
+$Script:DisplayIsOff=$false
+$Script:DisplayRequest=$null
+$Script:DisplayRecovered=$false
+$Script:DisplayLastRefresh=[DateTime]::MinValue
+$Script:DisplayLastOff=[DateTime]::MinValue
+$Script:DisplayTimer=New-Object Windows.Forms.Timer
+$Script:DisplayTimer.Interval=1000
+$Script:DisplayTimer.Add_Tick({
+    try {
+        $options=Get-DisplayOptions $ScriptDir
+        if(-not $Script:DisplayRecovered){
+            if(-not (Invoke-DisplayPowerLock {Restore-DisplayPower $ScriptDir})){return}
+            $Script:DisplayRecovered=$true
+        }
+        if($options.enabled -and -not $Script:DisplayRequest){
+            $ready=Invoke-DisplayPowerLock {
+                Restore-DisplayPower $ScriptDir
+                Initialize-DisplayNative
+                $request=New-Object PowerProfileDisplay
+                try{Set-DisplayPower $ScriptDir Awake;$Script:DisplayRequest=$request}
+                catch{$request.Dispose();Restore-DisplayPower $ScriptDir;throw}
+            }
+            if(-not $ready){return}
+            Write-ProfileEvent 'display.ready' '自动熄屏已启用；保持后台运行' -Data $options
+        }
+        $action=Get-DisplayAction $options.enabled (Get-UserActivityIdleSeconds) $options.idleMinutes $Script:DisplayIsOff
+        if($action -eq 'Wake'){
+            # Input itself wakes Windows; also wake for XInput controllers and disabling.
+            [PowerProfileDisplay]::ScreensOn()
+            $Script:DisplayIsOff=$false
+            Write-ProfileEvent 'display.wake' '输入恢复，点亮屏幕并恢复能效偏好'
+        }
+        if(-not $Script:DisplayIsOff -and $action -ne 'Off'){
+            [void](Invoke-DisplayPowerLock {Restore-DisplayPower $ScriptDir -OverlayOnly})
+        }
+        if(-not $options.enabled){
+            if($Script:DisplayRequest){
+                if(Invoke-DisplayPowerLock {Restore-DisplayPower $ScriptDir}){
+                    $Script:DisplayRequest.Dispose();$Script:DisplayRequest=$null
+                }
+            }
+            return
+        }
+        if(([DateTime]::UtcNow-$Script:DisplayLastRefresh).TotalSeconds -ge 10){
+            if(Invoke-DisplayPowerLock {Set-DisplayPower $ScriptDir Awake}){$Script:DisplayLastRefresh=[DateTime]::UtcNow}
+        }
+        if($action -eq 'Off'){
+            # Restore the older, more aggressive workstation overlay before blanking.
+            if(-not (Invoke-DisplayPowerLock {Restore-WorkstationOverlay $ScriptDir '自动熄屏，保留后台性能'})){return}
+            # Recheck input after any synchronous work to avoid blanking a returning user.
+            if((Get-UserActivityIdleSeconds) -lt $options.idleMinutes*60){return}
+            [PowerProfileDisplay]::ScreensOff()
+            $Script:DisplayIsOff=$true;$Script:DisplayLastOff=[DateTime]::UtcNow
+            Write-ProfileEvent 'display.off' '输入空闲达到阈值，关闭所有屏幕；后台任务继续运行' -Data $options
+        }
+        if($Script:DisplayIsOff){
+            [void](Invoke-DisplayPowerLock {Set-DisplayPower $ScriptDir Epp})
+            # Applications/notifications may turn screens on without input. Rate limit retries.
+            if(([DateTime]::UtcNow-$Script:DisplayLastOff).TotalSeconds -ge 30){
+                [PowerProfileDisplay]::ScreensOff();$Script:DisplayLastOff=[DateTime]::UtcNow
+            }
+        }
+    } catch {
+        Write-ProfileEvent 'display.failed' $_.Exception.Message 'ERROR'
+    }
+})
+$Script:DisplayTimer.Start()
+try {[System.Windows.Forms.Application]::Run()}
+finally {
+    $Script:DisplayTimer.Stop();$Script:DisplayTimer.Dispose()
+    $cleanupMutex=New-Object Threading.Mutex($false,'Global\PowerProfile_Worker');$cleanupLocked=$false
+    try {
+        try{$cleanupLocked=$cleanupMutex.WaitOne(10000)}catch [Threading.AbandonedMutexException]{$cleanupLocked=$true}
+        if($cleanupLocked){Restore-DisplayPower $ScriptDir}
+        if($Script:DisplayIsOff){[PowerProfileDisplay]::ScreensOn()}
+    }finally{
+        if($Script:DisplayRequest){$Script:DisplayRequest.Dispose()}
+        if($cleanupLocked){$cleanupMutex.ReleaseMutex()};$cleanupMutex.Dispose()
+    }
+}

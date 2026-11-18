@@ -9,6 +9,7 @@ if (-not $isAdmin) {
 . (Join-Path $PSScriptRoot 'PowerProfileDetection.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileLog.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileWorkstation.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileDisplay.ps1')
 Initialize-ProfileLogging $PSScriptRoot 'version-switch'
 $oldVersion=Get-SelectedTrayVersion $PSScriptRoot
 if ($Version -eq 'Selected') { $Version=$oldVersion }
@@ -49,6 +50,7 @@ try {
         try { $workerAcquired=$workerMutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $workerAcquired=$true }
         if (-not $workerAcquired) { throw 'Power worker is busy.' }
         Restore-WorkstationOverlay $PSScriptRoot '托盘重启或版本切换，恢复原参数'
+        Restore-DisplayPower $PSScriptRoot
         Write-ProfileEvent 'tray.switch' '开始切换托盘版本' -Data @{from=$oldVersion;to=$Version}
         foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='wscript.exe'" | Where-Object { Test-InstallationProcess $_ })) { Stop-Process -Id $p.ProcessId -Force }
         Start-Sleep -Milliseconds 500

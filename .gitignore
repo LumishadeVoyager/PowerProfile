@@ -17,6 +17,7 @@ system_status.json
 switch_result.json
 tray_switch_request.txt
 workstation_state.json
+*.json.corrupt-*
 tray_ui_request.txt
 logs/
 energy.settings.json
@@ -41,3 +42,5 @@ ai.charges.json
 ai.collector.*
 ai.*.tmp
 ai.backfill.history.json
+display.settings.json
+display_power_state.json

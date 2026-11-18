@@ -5,6 +5,29 @@ $project=Split-Path -Parent $PSScriptRoot
 . (Join-Path $project 'PowerProfileLog.ps1')
 Add-Type -Path (Join-Path $project 'PowerProfileWorkstation.cs')
 function Assert-Equal($Name,$Actual,$Expected){if($Actual -ne $Expected){throw "$Name expected $Expected got $Actual"};Write-Host "PASS $Name"}
+$recoveryRoot=Join-Path ([IO.Path]::GetTempPath()) ('PowerProfileRecoveryTests-'+[Guid]::NewGuid())
+[void][IO.Directory]::CreateDirectory($recoveryRoot)
+try {
+ $recoveryPath=Join-Path $recoveryRoot 'workstation_state.json'
+ foreach($damaged in @((([string][char]0)*621),'{broken','null','{}')) {
+  [IO.File]::WriteAllText($recoveryPath,$damaged)
+  Assert-Equal 'UI tolerates corrupt state without modifying it' ($null -eq (Read-WorkstationState $recoveryPath -ReadOnly)) $true
+  Assert-Equal 'read-only access preserves evidence' ([IO.File]::ReadAllText($recoveryPath)) $damaged
+  Restore-WorkstationOverlay $recoveryRoot 'fixture recovery'
+  Assert-Equal 'corrupt overlay cannot block base profile switch' (Read-AtomicJson $recoveryPath).active $false
+ }
+ $backups=@(Get-ChildItem $recoveryRoot -Filter '*.corrupt-*')
+ Assert-Equal 'each damaged snapshot is preserved' $backups.Count 4
+ Assert-Equal 'zero-filled evidence retains exact size' $backups.Where({$_.Length -eq 621}).Count 1
+ Write-AtomicJson $recoveryPath @{active=$true;baseline=@{scheme='invalid'}}
+ $failed=$false
+ try {Restore-WorkstationOverlay $recoveryRoot}catch{$failed=$_.Exception.Message -match 'Invalid recovery scheme'}
+ Assert-Equal 'valid JSON with unsafe recovery values still blocks restoration' $failed $true
+} finally {
+ $full=[IO.Path]::GetFullPath($recoveryRoot)
+ if(-not $full.StartsWith(([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')+'\PowerProfileRecoveryTests-'),[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe recovery fixture cleanup'}
+ Remove-Item -LiteralPath $full -Recurse -Force
+}
 $calendar=Get-Content (Join-Path $project 'workdays.2026.json') -Raw | ConvertFrom-Json
 Assert-Equal 'October holiday' (Test-ChineseWorkingDate ([DateTime]'2026-10-06') $calendar) $false
 Assert-Equal 'Saturday makeup working date' (Test-ChineseWorkingDate ([DateTime]'2026-10-10') $calendar) $true

@@ -18,6 +18,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PowerProfileDetection.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileLog.ps1')
 . (Join-Path $PSScriptRoot 'PowerProfileWorkstation.ps1')
+. (Join-Path $PSScriptRoot 'PowerProfileDisplay.ps1')
 if(-not $Diagnose){Initialize-ProfileLogging $PSScriptRoot 'worker' $OperationId}
 
 # Serialize CLI, tray and settings workers. Auto skips overlaps; manual changes wait.
@@ -495,6 +496,7 @@ function Set-PowerProfile {
     )
 
     Restore-WorkstationOverlay $PSScriptRoot '档位切换，先撤销附加省电'
+    Restore-DisplayPower $PSScriptRoot -OverlayOnly
     Write-ProfileEvent 'profile.apply.start' $Reason -Data @{mode=$Name;settings=$Profiles[$Name]}
     $cfg = $Profiles[$Name]
     if (-not $cfg) { throw "未知模式: $Name" }

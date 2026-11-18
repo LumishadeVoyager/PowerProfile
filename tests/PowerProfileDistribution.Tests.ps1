@@ -32,13 +32,14 @@ try {
     $source=Join-Path $tmp 'source';[void][IO.Directory]::CreateDirectory($source)
     Get-ChildItem $project -File | Where-Object {Test-ProfilePackagePath $_.Name} | Copy-Item -Destination $source
     Copy-Item (Join-Path $project 'legacy') (Join-Path $source 'legacy') -Recurse
-    $privateFiles=@('settings.json','energy.settings.json','devices.hub.json','cstate.settings.json','usage.logs.history.json','games.sessions.history.json','ai.settings.json','ai.snapshot.json','ai.usage.db','ai.usage.history.json','ai.backfill.history.json','ai.charges.json','ai.collector.lock')
+    $privateFiles=@('settings.json','energy.settings.json','devices.hub.json','cstate.settings.json','display.settings.json','display_power_state.json','usage.logs.history.json','games.sessions.history.json','ai.settings.json','ai.snapshot.json','ai.usage.db','ai.usage.history.json','ai.backfill.history.json','ai.charges.json','ai.collector.lock')
     foreach($private in $privateFiles){'private fixture'|Set-Content (Join-Path $source $private)}
     @{version='2.0.0';distribution='source'}|ConvertTo-Json|Set-Content (Join-Path $source 'version.json')
     $out=Join-Path $tmp 'out';& (Join-Path $project 'Build-Release.ps1') -Source $source -Output $out
     $zip=Join-Path $out 'PowerProfile-2.0.0-windows.zip';$package=Join-Path $tmp 'package'
     Expand-ProfilePackage $zip $package;$manifest=Test-ProfilePackage $package '2.0.0'
     Assert 'release ZIP has program files and manual' (@($manifest.files).Count -gt 30)
+    Assert 'display policy and native helper are bundled' ((Test-Path (Join-Path $package 'PowerProfileDisplay.ps1')) -and (Test-Path (Join-Path $package 'PowerProfileDisplay.cs')))
     Assert 'versioned release notes are bundled' (Test-Path (Join-Path $package 'RELEASE_NOTES_1.0.0.md'))
     Assert 'analytics dependencies are bundled' ((Test-Path (Join-Path $package 'PowerProfileGameAnalytics.cs')) -and (Test-Path (Join-Path $package 'PowerProfileInsights.ps1')) -and (Test-Path (Join-Path $package 'PowerProfileInsightsUI.cs')))
     Assert 'game and device card dependency is bundled' (Test-Path (Join-Path $package 'PowerProfileCards.cs'))
