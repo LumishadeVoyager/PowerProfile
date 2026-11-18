@@ -1,4 +1,6 @@
-# PowerProfile — CPU 电源模式自动切换器
+﻿# PowerProfile — CPU 电源模式自动切换器
+
+v1.10.0 新增内置手环互联网同步：随 PowerProfile 启动立即上传统计，并在后台同步 Codex 额度和完成提醒；不再依赖单独的 Node 服务，保留现有手机配对。见 [手环同步](BAND.md) 与 [v1.10.0 说明](RELEASE_NOTES_1.10.0.md)。
 
 Windows PowerShell 5.1 托盘工具。可放在任意本地目录；本机部署在 `E:\PowerProfile\`。
 
