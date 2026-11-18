@@ -24,6 +24,12 @@ try {
     Assert 'enabled by default with exact 15 minute threshold' ((Get-DisplayOptions $root).enabled -and (Get-DisplayOptions $root).idleMinutes -eq 15)
     Assert '899 seconds never blanks' ((Get-DisplayAction $true 899 15 $false) -eq 'None')
     Assert '900 seconds blanks' ((Get-DisplayAction $true 900 15 $false) -eq 'Off')
+    foreach($minutes in @(15,20,30,60,90)){
+        Write-AtomicJson (Join-Path $root 'display.settings.json') @{enabled=$true;idleMinutes=$minutes}
+        Assert "$minutes minute setting round trips" ((Get-DisplayOptions $root).idleMinutes -eq $minutes)
+        Assert "$minutes minutes cannot blank early" ((Get-DisplayAction $true ($minutes*60-1) $minutes $false) -eq 'None')
+        Assert "$minutes minutes blanks at threshold" ((Get-DisplayAction $true ($minutes*60) $minutes $false) -eq 'Off')
+    }
     Assert 'load/fullscreen is independent of inactivity' ((Get-DisplayAction $true 1500 15 $false) -eq 'Off')
     Assert 'input wakes' ((Get-DisplayAction $true 0 15 $true) -eq 'Wake')
     Assert 'disable wakes' ((Get-DisplayAction $false 1500 15 $true) -eq 'Wake')

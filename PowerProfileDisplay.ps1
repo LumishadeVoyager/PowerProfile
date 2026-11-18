@@ -1,6 +1,6 @@
 ﻿# Independent screen policy. Native calls only occur through explicit entry points.
 function Initialize-DisplayNative {
-    if(-not ('PowerProfileDisplay' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'PowerProfileDisplay.cs')}
+    if(-not ('PowerProfileDisplay' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'PowerProfileDisplay.cs') -ReferencedAssemblies System.Windows.Forms,System.Drawing}
 }
 function Get-DisplayOptions {
     param([string]$Root)

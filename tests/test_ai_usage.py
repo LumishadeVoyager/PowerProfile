@@ -17,7 +17,8 @@ class UsageTests(unittest.TestCase):
  def test_codex_cumulative_and_cache_not_double_counted(self):
   self.codex_meta();self.line(self.codex,self.token(1000,cached=800,output=200));self.line(self.codex,self.token(1000,sec=2,cached=800,output=200));self.line(self.codex,self.token(1500,sec=3,cached=1000,output=300));r=self.rows()[0];self.assertEqual(r['tokens'],1800);self.assertEqual(r['cached'],1000);self.assertEqual(r['input'],500);self.assertIsNone(r['cost']);self.assertEqual(self.rows()[0]['tokens'],1800)
  def test_old_session_backfill_and_live_boundary_do_not_overlap(self):
-  old=self.token(100000,sec=-3600);self.codex_meta();self.line(self.codex,old);os.utime(self.codex,(self.now.timestamp()-1,self.now.timestamp()-1));self.assertEqual(self.rows()[0]['tokens'],100000);self.line(self.codex,self.token(100100,sec=3));self.assertEqual(self.rows()[0]['tokens'],100100);self.assertEqual(self.rows()[0]['tokens'],100100)
+  # Around local midnight the historical and live increments belong to different daily rows.
+  old=self.token(100000,sec=-3600);self.codex_meta();self.line(self.codex,old);os.utime(self.codex,(self.now.timestamp()-1,self.now.timestamp()-1));self.assertEqual(sum(r['tokens'] for r in self.rows()),100000);self.line(self.codex,self.token(100100,sec=3));self.assertEqual(sum(r['tokens'] for r in self.rows()),100100);self.assertEqual(sum(r['tokens'] for r in self.rows()),100100)
  def test_archived_duplicate_session_is_not_counted_twice(self):
   self.codex_meta();self.line(self.codex,self.token(100,sec=-5));archive=self.home/'.codex/archived_sessions';archive.mkdir();(archive/'copy.jsonl').write_bytes(self.codex.read_bytes());self.assertEqual(self.rows()[0]['tokens'],100)
  def test_historical_and_live_cc_rows_keep_exact_total(self):

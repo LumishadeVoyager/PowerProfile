@@ -1014,7 +1014,7 @@ $menuStatus = $menu.Items.Add('当前: ...')
 $menuStatus.Enabled = $false
 
 $menuSettings = $menu.Items.Add('设置...')
-$menuDisplay=$menu.Items.Add('无操作 15 分钟自动熄屏（保持运行）')
+$menuDisplay=$menu.Items.Add('无操作 15 分钟安全黑屏（保持运行）')
 $menuDisplay.Add_Click({
     try {
         $options=Get-DisplayOptions $ScriptDir
@@ -1022,8 +1022,25 @@ $menuDisplay.Add_Click({
         Write-AtomicJson (Join-Path $ScriptDir 'display.settings.json') $options -Pretty
     }catch{Write-ProfileEvent 'display.settings.failed' $_.Exception.Message 'ERROR'}
 })
+$menuDisplayDelay=New-Object Windows.Forms.ToolStripMenuItem('安全黑屏等待时间')
+foreach($minutes in @(15,20,30,60,90)){
+    $item=New-Object Windows.Forms.ToolStripMenuItem("$minutes 分钟")
+    $item.Tag=$minutes
+    $item.Add_Click({param($sender,$eventArgs)
+        try {
+            $options=Get-DisplayOptions $ScriptDir;$options.idleMinutes=[int]$sender.Tag
+            Write-AtomicJson (Join-Path $ScriptDir 'display.settings.json') $options -Pretty
+            Write-ProfileEvent 'display.settings' '安全黑屏等待时间已更新' -Data $options
+        }catch{Write-ProfileEvent 'display.settings.failed' $_.Exception.Message 'ERROR'}
+    })
+    [void]$menuDisplayDelay.DropDownItems.Add($item)
+}
+[void]$menu.Items.Add($menuDisplayDelay)
 $menu.Add_Opening({
-    try{$options=Get-DisplayOptions $ScriptDir;$menuDisplay.Checked=$options.enabled;$menuDisplay.Text="无操作 $($options.idleMinutes) 分钟自动熄屏（保持运行）"}catch{}
+    try{
+        $options=Get-DisplayOptions $ScriptDir;$menuDisplay.Checked=$options.enabled;$menuDisplay.Text="无操作 $($options.idleMinutes) 分钟安全黑屏（保持运行）"
+        foreach($item in $menuDisplayDelay.DropDownItems){$item.Checked=([int]$item.Tag -eq $options.idleMinutes)}
+    }catch{}
 })
 $menuSettings.Image = New-ColorDot ([System.Drawing.Color]::FromArgb(96, 125, 139))
 
@@ -1309,6 +1326,7 @@ $Script:DisplayRequest=$null
 $Script:DisplayRecovered=$false
 $Script:DisplayLastRefresh=[DateTime]::MinValue
 $Script:DisplayLastOff=[DateTime]::MinValue
+$Script:DisplayHeartbeat=[DateTime]::MinValue
 $Script:DisplayTimer=New-Object Windows.Forms.Timer
 $Script:DisplayTimer.Interval=1000
 $Script:DisplayTimer.Add_Tick({
@@ -1327,7 +1345,7 @@ $Script:DisplayTimer.Add_Tick({
                 catch{$request.Dispose();Restore-DisplayPower $ScriptDir;throw}
             }
             if(-not $ready){return}
-            Write-ProfileEvent 'display.ready' '自动熄屏已启用；保持后台运行' -Data $options
+            Write-ProfileEvent 'display.ready' '安全黑屏已启用；使用纯黑窗口，不发送硬件关屏命令' -Data $options
         }
         $action=Get-DisplayAction $options.enabled (Get-UserActivityIdleSeconds) $options.idleMinutes $Script:DisplayIsOff
         if($action -eq 'Wake'){
@@ -1357,10 +1375,14 @@ $Script:DisplayTimer.Add_Tick({
             if((Get-UserActivityIdleSeconds) -lt $options.idleMinutes*60){return}
             [PowerProfileDisplay]::ScreensOff()
             $Script:DisplayIsOff=$true;$Script:DisplayLastOff=[DateTime]::UtcNow
-            Write-ProfileEvent 'display.off' '输入空闲达到阈值，关闭所有屏幕；后台任务继续运行' -Data $options
+            Write-ProfileEvent 'display.off' '输入空闲达到阈值，显示纯黑窗口；未请求硬件关屏或待机' -Data $options
         }
         if($Script:DisplayIsOff){
             [void](Invoke-DisplayPowerLock {Set-DisplayPower $ScriptDir Epp})
+            if(([DateTime]::UtcNow-$Script:DisplayHeartbeat).TotalSeconds -ge 60){
+                Write-ProfileEvent 'display.heartbeat' '安全黑屏期间托盘持续运行' -Data @{backend='BlackWindows';screens=[PowerProfileDisplay]::BlackScreenCount;idleSeconds=(Get-UserActivityIdleSeconds)}
+                $Script:DisplayHeartbeat=[DateTime]::UtcNow
+            }
             # Applications/notifications may turn screens on without input. Rate limit retries.
             if(([DateTime]::UtcNow-$Script:DisplayLastOff).TotalSeconds -ge 30){
                 [PowerProfileDisplay]::ScreensOff();$Script:DisplayLastOff=[DateTime]::UtcNow
