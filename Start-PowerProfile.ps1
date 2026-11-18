@@ -28,10 +28,12 @@ if ($Version -eq 'Legacy') {
 }
 $tray=Get-TrayVersionPath $PSScriptRoot $Version
 if (-not (Test-Path $tray)) { throw "Missing tray: $tray" }
+. (Join-Path $PSScriptRoot 'PowerProfileBand.ps1')
+Initialize-ProfileBandSync $PSScriptRoot
 try { & $tray }
 catch {
     Add-Content (Join-Path $PSScriptRoot 'tray_lifecycle.log') -Value "[START ERROR] $Version $_" -Encoding UTF8
     if($Version -eq 'Modern'){Start-TrayVersionSwitch $PSScriptRoot 'Legacy'}
     throw
 }
-} finally {if($startupLocked){$startupMutex.ReleaseMutex()};$startupMutex.Dispose()}
+} finally {if(Get-Command Stop-ProfileBandSync -ErrorAction SilentlyContinue){Stop-ProfileBandSync};if($startupLocked){$startupMutex.ReleaseMutex()};$startupMutex.Dispose()}
