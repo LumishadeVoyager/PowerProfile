@@ -1,7 +1,9 @@
 ﻿$ErrorActionPreference='Stop'
-$project=Split-Path -Parent $PSScriptRoot
+$project=if($env:POWERPROFILE_DISPLAY_TEST_ROOT){$env:POWERPROFILE_DISPLAY_TEST_ROOT}else{Split-Path -Parent $PSScriptRoot}
 . (Join-Path $project 'PowerProfileDisplay.ps1')
 Initialize-DisplayNative
+Add-Type -Path @((Join-Path $project 'PowerProfileWorkspace.cs'),(Join-Path $project 'PowerProfileCards.cs'),(Join-Path $project 'PowerProfileSkin.cs'),(Join-Path $project 'PowerProfileInsightsUI.cs')) -ReferencedAssemblies System.Drawing,System.Windows.Forms,System.Core,Accessibility
+[ProfileSkin]::MonitorWindows()
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -18,6 +20,23 @@ try {
     [PowerProfileDisplay]::ScreensOff()
     if([PowerProfileDisplay]::BlackScreenCount -ne [Windows.Forms.Screen]::AllScreens.Length){throw 'Duplicate masks'}
     Write-Host 'PASS repeated blackout does not accumulate windows'
+    foreach($skin in @('Liquid','ClassicGlass','Standard')){foreach($dark in @($false,$true)){
+        [ProfileSkin]::Set($skin);[ProfileTheme]::Dark=$dark
+        [Windows.Forms.Application]::RaiseIdle([EventArgs]::Empty)
+        foreach($form in [Windows.Forms.Application]::OpenForms){
+            [ProfileTheme]::ApplyWindow($form)
+            [ProfileTheme]::Apply($form,$dark)
+            if($form.BackColor.ToArgb() -ne [Drawing.Color]::Black.ToArgb()){throw "Theme recolored blackout: $skin dark=$dark"}
+            $bitmap=New-Object Drawing.Bitmap($form.ClientSize.Width,$form.ClientSize.Height)
+            try {
+                $form.DrawToBitmap($bitmap,$form.ClientRectangle)
+                for($y=0;$y -lt $bitmap.Height;$y+=31){for($x=0;$x -lt $bitmap.Width;$x+=31){
+                    if($bitmap.GetPixel($x,$y).ToArgb() -ne [Drawing.Color]::Black.ToArgb()){throw "Non-black rendered pixel: $skin dark=$dark at $x,$y"}
+                }}
+            }finally{$bitmap.Dispose()}
+        }
+        Write-Host "PASS global idle and explicit $skin dark=$dark keep blackout pixels black"
+    }}
 }finally{[PowerProfileDisplay]::ScreensOn()}
 if([PowerProfileDisplay]::BlackScreenCount -ne 0){throw 'Wake left blackout windows'}
 Write-Host 'PASS wake disposes every blackout window'

@@ -45,9 +45,12 @@ public sealed class PowerProfileDisplay : IDisposable {
     // Hardware display-off requests can initiate Modern Standby despite power requests.
     // Cover the displays without invoking the Windows power-transition path.
     sealed class BlackScreen : Form {
+        public bool SuppressProfileTheme { get { return true; } }
         protected override bool ShowWithoutActivation { get { return true; } }
         protected override CreateParams CreateParams { get { var p=base.CreateParams;p.ExStyle|=0x08000080;return p; } }
-        public BlackScreen(Rectangle bounds) { FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Bounds=bounds;BackColor=Color.Black;TopMost=true; }
+        protected override void OnPaintBackground(PaintEventArgs e) { e.Graphics.Clear(Color.Black); }
+        protected override void OnPaint(PaintEventArgs e) { e.Graphics.Clear(Color.Black); }
+        public BlackScreen(Rectangle bounds) { SetStyle(ControlStyles.Opaque|ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer,true);FormBorderStyle=FormBorderStyle.None;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Bounds=bounds;BackColor=Color.Black;TopMost=true; }
     }
     static readonly List<Form> screens=new List<Form>();
     public static int BlackScreenCount { get { return screens.Count; } }

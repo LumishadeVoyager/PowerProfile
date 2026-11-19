@@ -26,10 +26,12 @@ public static class ProfileSkin {
     public static void Set(string kind){Kind=kind=="Liquid"||kind=="ClassicGlass"?kind:"Standard";Changed();}
     public static void MonitorWindows(){if(monitoring)return;monitoring=true;Application.Idle+=(s,e)=>{
         if(refreshing)return;refreshing=true;
-        try{foreach(Form f in Application.OpenForms.Cast<Form>().ToArray()){int revision;if(!windows.TryGetValue(f,out revision)||revision!=Revision){windows[f]=Revision;ProfileTheme.ApplyWindow(f);}}}
+        try{foreach(Form f in Application.OpenForms.Cast<Form>().ToArray()){if(IsThemeExcluded(f))continue;int revision;if(!windows.TryGetValue(f,out revision)||revision!=Revision){windows[f]=Revision;ProfileTheme.ApplyWindow(f);}}}
         finally{refreshing=false;}
     };}
-    public static void Register(Form f){if(!registered.Add(f))return;if(!windows.ContainsKey(f))windows[f]=-1;f.Disposed+=(s,e)=>{windows.Remove(f);registered.Remove(f);Scene scene;if(scenes.TryGetValue(f,out scene)){if(scene.Image!=null)scene.Image.Dispose();scenes.Remove(f);}};}
+    // Optional form contract also works for independently compiled native windows.
+    public static bool IsThemeExcluded(Control c){var form=c as Form??c.FindForm();if(form==null)return false;var property=form.GetType().GetProperty("SuppressProfileTheme");return property!=null&&property.PropertyType==typeof(bool)&&(bool)property.GetValue(form,null);}
+    public static void Register(Form f){if(IsThemeExcluded(f)||!registered.Add(f))return;if(!windows.ContainsKey(f))windows[f]=-1;f.Disposed+=(s,e)=>{windows.Remove(f);registered.Remove(f);Scene scene;if(scenes.TryGetValue(f,out scene)){if(scene.Image!=null)scene.Image.Dispose();scenes.Remove(f);}};}
     static Point Origin(Control c,Form f){var p=Point.Empty;for(Control at=c;at!=null&&at!=f;at=at.Parent){p.Offset(at.Left,at.Top);}return p;}
     static Bitmap SceneFor(Form f){
         Scene scene;if(!scenes.TryGetValue(f,out scene)){scene=new Scene();scenes[f]=scene;Register(f);}

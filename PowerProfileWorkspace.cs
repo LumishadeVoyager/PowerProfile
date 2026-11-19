@@ -37,8 +37,8 @@ public static class ProfileTheme {
     public static Color Selection {get{return SystemInformation.HighContrast?SystemColors.Highlight:Dark?Color.FromArgb(42,65,87):Color.FromArgb(228,239,252);}}
     public static bool SystemDark(){try{return Convert.ToInt32(Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize","AppsUseLightTheme",1))==0;}catch{return false;}}
     public static void Apply(Control root,bool dark){if(Dark!=dark){Dark=dark;ProfileSkin.Changed();}Style(root);root.Invalidate(true);}
-    public static void ApplyWindow(Form form){Style(form);if(!(form is ProfileWorkspaceForm))ProfileGlass.Apply(form,ProfileSkin.SystemBlur&&ProfileSkin.Kind!="Standard",0);form.Invalidate(true);}
-    public static void Style(Control root){Paint(root);}
+    public static void ApplyWindow(Form form){if(ProfileSkin.IsThemeExcluded(form))return;Style(form);if(!(form is ProfileWorkspaceForm))ProfileGlass.Apply(form,ProfileSkin.SystemBlur&&ProfileSkin.Kind!="Standard",0);form.Invalidate(true);}
+    public static void Style(Control root){if(!ProfileSkin.IsThemeExcluded(root))Paint(root);}
     static void Paint(Control c){
         bool alert=c.ForeColor.R>140&&c.ForeColor.R>c.ForeColor.G*1.35&&c.ForeColor.B<c.ForeColor.R*.85;bool surface=c is ProfileSurface || c is TextBoxBase || c is ComboBox || c is NumericUpDown || c is DataGridView;
         c.BackColor=surface?Surface:(c is Form||c.Parent==null?Background:c.Parent.BackColor);c.ForeColor=alert?(Dark?Color.FromArgb(255,157,151):Color.FromArgb(182,48,43)):Text;
