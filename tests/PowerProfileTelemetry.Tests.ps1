@@ -2,6 +2,19 @@
 $project=Split-Path -Parent $PSScriptRoot
 . (Join-Path $project 'PowerProfileTelemetry.ps1')
 function Assert-Equal($Name,$Actual,$Expected){if($Actual -ne $Expected){throw "$Name expected $Expected got $Actual"};Write-Host "PASS $Name"}
+$timeoutRoot=Join-Path ([IO.Path]::GetTempPath()) ('ProfileGpuTimeout-'+[Guid]::NewGuid())
+[void][IO.Directory]::CreateDirectory($timeoutRoot)
+try {
+    [IO.File]::WriteAllText((Join-Path $timeoutRoot 'PowerProfileGpuSample.ps1'),'param($OperationId);Start-Sleep -Seconds 30')
+    $watch=[Diagnostics.Stopwatch]::StartNew();$bounded=$false
+    try{Get-BoundedGpuSample $timeoutRoot 500}catch{$bounded=$_.Exception.Message -match 'GPU'}
+    Assert-Equal 'hung GPU child is bounded and reported' $bounded $true
+    Assert-Equal 'hung GPU cannot hold the parent for thirty seconds' ($watch.Elapsed.TotalSeconds -lt 5) $true
+}finally{
+    $prefix=([IO.Path]::GetTempPath()).TrimEnd('\')+'\ProfileGpuTimeout-'
+    if(-not ([IO.Path]::GetFullPath($timeoutRoot)).StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe cleanup'}
+    Remove-Item -LiteralPath $timeoutRoot -Recurse -Force
+}
 $now=[DateTime]'2026-10-09T06:00:00Z'
 $previous=[PSCustomObject]@{observedAt=$now.AddSeconds(-5).ToString('o');gpu3d=33;cpu=10;memoryPercent=52;videoEncode=12;compute=$null}
 $current=@{cpu=20;memoryPercent=53;gpu3d=$null;videoEncode=0;compute=$null}

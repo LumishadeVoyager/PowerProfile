@@ -13,6 +13,12 @@ try {
     $Script:EnergyService.Configure('','',[decimal]0.7)
     Assert 'fixed tariff persists independently' ($Script:EnergyService.GetSnapshot().Price -eq [decimal]0.7)
     Assert 'price alone does not connect or control' (-not $Script:EnergyService.GetSnapshot().Configured)
+    $hello=New-Object byte[] 32;$hello[0]=0x21;$hello[1]=0x31;$hello[3]=32;$hello[11]=42
+    Assert 'discovery matches only bound device ID' ([ProfilePlugTransport]::MatchesHello($hello,42))
+    Assert 'discovery rejects a different device' (-not [ProfilePlugTransport]::MatchesHello($hello,43))
+    Assert 'discovery never binds an unknown identity' (-not [ProfilePlugTransport]::MatchesHello($hello,0))
+    $hello[3]=31
+    Assert 'discovery rejects malformed hello' (-not [ProfilePlugTransport]::MatchesHello($hello,42))
     $secret='0123456789abcdef0123456789abcdef'
     $Script:EnergyService.Configure('192.168.1.254',$secret,[decimal]0.7)
     $saved=[IO.File]::ReadAllText((Join-Path $ScriptDir 'energy.settings.json'))

@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -13,6 +14,28 @@ using System.Windows.Forms;
 
 // Optional LAN miIO adapter. No cloud password, power-plan or hibernation calls.
 public sealed class ProfilePlugTransport {
+    public static bool MatchesHello(byte[] p,uint expected){return expected!=0&&p!=null&&p.Length==32&&p[0]==0x21&&p[1]==0x31&&p[2]==0&&p[3]==32&&(((uint)p[8]<<24)|((uint)p[9]<<16)|((uint)p[10]<<8)|p[11])==expected;}
+    public static string Discover(uint expected){
+        if(expected==0)return null;
+        using(var socket=new UdpClient()){
+            socket.EnableBroadcast=true;socket.Client.ReceiveTimeout=150;
+            var hello=new byte[32];for(int i=4;i<32;i++)hello[i]=255;hello[0]=0x21;hello[1]=0x31;hello[3]=32;
+            var targets=new HashSet<string>();
+            foreach(var adapter in NetworkInterface.GetAllNetworkInterfaces()){
+                if(adapter.OperationalStatus!=OperationalStatus.Up||adapter.NetworkInterfaceType==NetworkInterfaceType.Loopback)continue;
+                foreach(var local in adapter.GetIPProperties().UnicastAddresses){
+                    if(local.Address.AddressFamily!=AddressFamily.InterNetwork||local.IPv4Mask==null)continue;
+                    byte[] ip=local.Address.GetAddressBytes(),mask=local.IPv4Mask.GetAddressBytes();
+                    if(!(ip[0]==10||(ip[0]==192&&ip[1]==168)||(ip[0]==172&&ip[1]>=16&&ip[1]<=31)))continue;
+                    byte[] broadcast=new byte[4];for(int i=0;i<4;i++)broadcast[i]=(byte)(ip[i]|(255-mask[i]));targets.Add(new IPAddress(broadcast).ToString());
+                    if(mask[0]==255&&mask[1]==255&&mask[2]==255&&mask[3]==0)for(int i=1;i<255;i++)targets.Add(ip[0]+"."+ip[1]+"."+ip[2]+"."+i);
+                }
+            }
+            foreach(string target in targets)try{socket.Send(hello,hello.Length,new IPEndPoint(IPAddress.Parse(target),54321));}catch(SocketException){}
+            var until=DateTime.UtcNow.AddSeconds(3);
+            while(DateTime.UtcNow<until)try{var endpoint=new IPEndPoint(IPAddress.Any,0);var packet=socket.Receive(ref endpoint);if(MatchesHello(packet,expected))return endpoint.Address.ToString();}catch(SocketException){}
+        }return null;
+    }
     public uint DeviceId {get;private set;}
     static int messageId=new Random().Next(1,9000);
     readonly string address; readonly byte[] token; readonly uint expectedDeviceId;
@@ -90,7 +113,7 @@ public sealed class ProfilePlugTransport {
 public sealed class ProfileEnergyPoint {public DateTime Time {get;set;} public double Watts {get;set;} public bool BreakBefore {get;set;} public bool InvalidAfter {get;set;} public bool? IsGame {get;set;} }
 public sealed class ProfileEnergyDay {public double KWh {get;set;} public double Seconds {get;set;} public string Source {get;set;} public double? HighPowerSeconds {get;set;} public double HighPowerCoverageSeconds {get;set;} public double? GameSeconds {get;set;} public double GameCoverageSeconds {get;set;} public string UsageSource {get;set;} public double? ModeGameSeconds {get;set;} public string GameNames {get;set;} }
 public sealed class ProfileCloudHistory {public uint DeviceId {get;set;} public string Model {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} public string Query {get;set;} public double Multiplier {get;set;} public string FetchedAt {get;set;} }
-public sealed class ProfileEnergyHistory {public string Device {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
+public sealed class ProfileEnergyHistory {public string Device {get;set;} public uint DeviceId {get;set;} public List<ProfileEnergyPoint> Points {get;set;} public Dictionary<string,ProfileEnergyDay> Days {get;set;} }
 public sealed class ProfileEnergyConfig {public string Address {get;set;} public string Secret {get;set;} public decimal? Price {get;set;} public uint DeviceId {get;set;} }
 public sealed class ProfileEnergySnapshot {
     public bool Configured; public bool Busy; public bool? On; public double? Watts; public DateTime ObservedAt;
@@ -107,7 +130,7 @@ public sealed class ProfileConnectionProbe {
 }
 public sealed class ProfileEnergyService : IDisposable {
     public const double HighPowerWatts=150;
-    readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;
+    readonly object gate=new object();readonly string root;readonly bool autoPoll;System.Threading.Timer timer;bool busy,disposed;DateTime lastAttempt;
     ProfileEnergyConfig config;ProfileEnergyHistory history;ProfileCloudHistory cloud;ProfileEnergySnapshot snapshot=new ProfileEnergySnapshot();
     readonly Queue<string[]> events=new Queue<string[]>();
     readonly ProfileUsageLogReader usageLogs;ProfileUsageLogCache usageCache;System.Threading.Timer usageTimer;bool usageBusy,usageError;
@@ -118,7 +141,7 @@ public sealed class ProfileEnergyService : IDisposable {
         try {config=json.Deserialize<ProfileEnergyConfig>(ProfileEnergyStore.Read(Path.Combine(root,"energy.settings.json")));}
         catch(FileNotFoundException){config=new ProfileEnergyConfig();}catch{config=new ProfileEnergyConfig();snapshot.Status="连接配置损坏 · 请重新设置";Event("energy.config.failed","连接配置无法读取","WARN");}
         history=new ProfileEnergyHistory{Points=new List<ProfileEnergyPoint>(),Days=new Dictionary<string,ProfileEnergyDay>()};
-        try{var loaded=json.Deserialize<ProfileEnergyHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.history.json")));if(loaded.Points!=null && loaded.Days!=null && loaded.Device==config.Address)history=loaded;}
+        try{var loaded=json.Deserialize<ProfileEnergyHistory>(ProfileEnergyStore.Read(Path.Combine(root,"energy.history.json")));if(loaded.Points!=null && loaded.Days!=null && (loaded.Device==config.Address||(config.DeviceId!=0&&loaded.DeviceId==config.DeviceId)))history=loaded;}
         catch(FileNotFoundException){}catch{Event("energy.history.failed","历史记录无法读取；本次重新累计","WARN");snapshot.Status="历史记录损坏 · 重新累计";}
         // Even a short process restart is an unobserved interval.
         if(history.Points.Count>0)history.Points[history.Points.Count-1].InvalidAfter=true;
@@ -173,6 +196,7 @@ public sealed class ProfileEnergyService : IDisposable {
         config=next;snapshot=new ProfileEnergySnapshot{Configured=!String.IsNullOrWhiteSpace(address),Price=price,Status=String.IsNullOrWhiteSpace(address)?"未连接 · 请设置插座":"等待连接"};
         timer.Change(snapshot.Configured && autoPoll?0:Timeout.Infinite,snapshot.Configured && autoPoll?60000:Timeout.Infinite);Event("energy.config.saved","已保存插座配置与固定电价；凭据使用 Windows 当前用户加密","INFO");}}
     public ProfileEnergySnapshot GetSnapshot(){lock(gate){
+        if(autoPoll&&!disposed&&snapshot.Configured&&!busy&&(DateTime.UtcNow-lastAttempt).TotalSeconds>=30&&(snapshot.ObservedAt==DateTime.MinValue||(DateTime.UtcNow-snapshot.ObservedAt).TotalSeconds>90))Refresh();
         var merged=new ProfileEnergyHistory{Days=new Dictionary<string,ProfileEnergyDay>(history.Days)};
         string today=China(DateTime.UtcNow).ToString("yyyy-MM-dd");
         if(cloud!=null && cloud.DeviceId==config.DeviceId && config.DeviceId!=0)foreach(var item in cloud.Days)if(String.CompareOrdinal(item.Key,today)<0)merged.Days[item.Key]=item.Value;
@@ -212,13 +236,25 @@ public sealed class ProfileEnergyService : IDisposable {
     }
     public void Refresh(){Start(null);}
     public void SetSwitch(bool on){Start(on);}
-    void Start(bool? command){lock(gate){if(disposed || busy || !snapshot.Configured)return;busy=true;snapshot.Busy=true;}
+    void Start(bool? command){lock(gate){if(disposed || busy || !snapshot.Configured)return;busy=true;snapshot.Busy=true;lastAttempt=DateTime.UtcNow;}
         ThreadPool.QueueUserWorkItem(_=>Collect(command));}
     void Collect(bool? command){string operation=Guid.NewGuid().ToString();try{
         if(command.HasValue)Event("energy.switch.request","已确认手动"+(command.Value?"开启":"关闭")+"插座","INFO",operation);
         ProfileEnergyConfig c;lock(gate)c=config;
         string secret=Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(c.Secret),entropy,DataProtectionScope.CurrentUser));
-        var transport=new ProfilePlugTransport(c.Address,secret,c.DeviceId);transport.VerifyModel();
+        var transport=new ProfilePlugTransport(c.Address,secret,c.DeviceId);
+        try{transport.VerifyModel();}
+        catch(Exception failure){
+            if(command.HasValue||c.DeviceId==0||!(failure is SocketException||failure is InvalidDataException))throw;
+            string found=ProfilePlugTransport.Discover(c.DeviceId);if(found==null)throw;
+            var recovered=new ProfilePlugTransport(found,secret,c.DeviceId);recovered.VerifyModel();
+            lock(gate){if(disposed||!Object.ReferenceEquals(config,c))return;
+                c.Address=found;history.Device=found;history.DeviceId=c.DeviceId;if(history.Points.Count>0)history.Points[history.Points.Count-1].InvalidAfter=true;
+                ProfileEnergyStore.Write(Path.Combine(root,"energy.history.json"),Serializer().Serialize(history));
+                ProfileEnergyStore.Write(Path.Combine(root,"energy.settings.json"),Serializer().Serialize(c));
+                Event("energy.address.recovered","已按设备身份重新发现并验证插座；历史与授权保留","INFO",operation);
+            }transport=recovered;
+        }
         if(c.DeviceId!=0 && transport.DeviceId!=c.DeviceId)throw new InvalidDataException("该 IP 已分配给其他插座，请更新地址；历史记录已保留。");
         if(c.DeviceId==0){lock(gate){c.DeviceId=transport.DeviceId;ProfileEnergyStore.Write(Path.Combine(root,"energy.settings.json"),Serializer().Serialize(c));}}
         if(command.HasValue){transport.Switch(command.Value);Event("energy.switch.accepted","插座确认手动开关请求；正在复核实际状态","INFO",operation);}
@@ -230,7 +266,7 @@ public sealed class ProfileEnergyService : IDisposable {
         DateTime now=DateTime.UtcNow;bool? isGame=ReadGameState(root,now);
         lock(gate){if(snapshot.Status!="已连接" && snapshot.Status!="功率读数未提供")Event("energy.connected","插座型号与授权校验通过","INFO",operation);
             snapshot.On=(bool)state;snapshot.Watts=validPower;snapshot.ObservedAt=now;snapshot.Status=validPower.HasValue?"已连接":"功率读数未提供";
-            if(validPower.HasValue){history.Device=c.Address;AddSample(history,now,validPower.Value,isGame);}
+            if(validPower.HasValue){history.Device=c.Address;history.DeviceId=c.DeviceId;AddSample(history,now,validPower.Value,isGame);}
             ProfileEnergyStore.Write(Path.Combine(root,"energy.history.json"),Serializer().Serialize(history));}
     }catch(Exception ex){lock(gate){string message=ex is SocketException ? "插座无响应 · 检查同一局域网、IP 和固件支持" : ex is CryptographicException ? "设备授权无法解密 · 请重新设置 Token" : ex.Message;
         if(snapshot.Status!=message || command.HasValue)Event(command.HasValue?"energy.switch.failed":"energy.sample.failed",message,"WARN",operation);snapshot.Status=message;

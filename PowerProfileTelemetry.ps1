@@ -1,4 +1,19 @@
 ﻿# Merge metrics independently: failed GPU samples never clear working CPU/memory values.
+function Get-BoundedGpuSample {
+    param([string]$Root,[int]$TimeoutMs=8000)
+    $operation=[Guid]::NewGuid().ToString();$path=Join-Path $Root "telemetry.gpu.$operation.json";$process=$null
+    try {
+        $process=Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"{0}"' -f (Join-Path $Root 'PowerProfileGpuSample.ps1')),'-OperationId',$operation)
+        if(-not $process.WaitForExit($TimeoutMs)){throw 'GPU 采样超时；CPU、频率及内存继续更新'}
+        if($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $path)){throw 'GPU 驱动未返回有效样本；其他指标继续更新'}
+        $sample=Read-AtomicJson $path;$result=@{values=@{};errors=@{}}
+        foreach($key in @('gpu3d','videoEncode','compute')){$result.values[$key]=$sample.values.$key;$result.errors[$key]=$sample.errors.$key}
+        return $result
+    }finally{
+        if($process){if(-not $process.HasExited){try{$process.Kill()}catch{}};$process.Dispose()}
+        Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
+    }
+}
 function Merge-TelemetryMetrics {
     param($Current,$Previous,$Errors,[DateTime]$Now=[DateTime]::UtcNow)
     $Now=$Now.ToUniversalTime()

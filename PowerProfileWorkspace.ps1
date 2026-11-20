@@ -121,6 +121,7 @@ function Update-WorkspacePending($hub){$w=$Script:Workspace;$t=$w.Tag;
 function Update-ProfileWorkspace {
     param($State=$null)
     $w=$Script:Workspace;if(-not $w -or $w.IsDisposed){return};$t=$w.Tag
+    if($w.ActivePage -eq 'Overview' -and (Get-Command Invoke-TelemetrySample -ErrorAction SilentlyContinue) -and (Get-Command Start-HiddenPowerShell -ErrorAction SilentlyContinue)){Invoke-TelemetrySample}
     if($t.PendingRequest){Update-WorkspacePending (Get-WorkspaceHub)}
     if($w.ActivePage -eq 'AI'){Update-WorkspaceAI;return}
     if($w.ActivePage -eq 'Settings'){return}

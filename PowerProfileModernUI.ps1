@@ -97,6 +97,7 @@ function Initialize-ModernForm {
     $Form.Add_Shown({param($sender,$eventArgs) if('ProfileTheme' -as [type]){[ProfileTheme]::ApplyWindow($sender)};[ProfileVisual]::ActivateDashboard($sender.Handle)})
 }
 function Invoke-TelemetrySample {
+    if($Script:TelemetryProcess -and $Script:TelemetryProcess.HasExited -and ([DateTime]::UtcNow-$Script:TelemetryStarted).TotalSeconds -lt 5){return}
     $timedOut=$false
     if($Script:TelemetryProcess -and -not $Script:TelemetryProcess.HasExited){
         # A partial snapshot is progress, even while WMI/PDH is still completing.

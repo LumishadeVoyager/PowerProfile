@@ -48,9 +48,7 @@ $stage='publish-partial'
 Write-AtomicJson (Join-Path $PSScriptRoot 'system_status.json') $partial
 try{
     # PDH may report an invalid initial sample. Keep the query alive and evaluate the second observation per metric.
-    $last=Get-Counter '\GPU Engine(*)\Utilization Percentage' -SampleInterval 1 -MaxSamples 2 -ErrorAction SilentlyContinue | Select-Object -Last 1
-    if(-not $last -or -not $last.CounterSamples){throw '驱动未返回 GPU 样本'}
-    $gpu=Get-GpuMetricValues $last.CounterSamples
+    $gpu=Get-BoundedGpuSample $PSScriptRoot
     foreach($key in @('gpu3d','videoEncode','compute')){$current[$key]=$gpu.values[$key];$errors[$key]=$gpu.errors[$key]}
 }catch{foreach($key in @('gpu3d','videoEncode','compute')){$errors[$key]='GPU 计数器读取失败：'+$_.Exception.Message}}
 $stage='merge-final'
