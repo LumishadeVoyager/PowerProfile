@@ -45,3 +45,4 @@ ai.backfill.history.json
 display.settings.json
 display_power_state.json
 telemetry.gpu.*.json
+media.playback_state.json

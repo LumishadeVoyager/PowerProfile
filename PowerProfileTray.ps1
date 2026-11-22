@@ -13,6 +13,7 @@ $DetectionScript = Join-Path $ScriptDir 'PowerProfileDetection.ps1'
 . (Join-Path $ScriptDir 'PowerProfileLog.ps1')
 . (Join-Path $ScriptDir 'PowerProfileWorkstation.ps1')
 . (Join-Path $ScriptDir 'PowerProfileDisplay.ps1')
+. (Join-Path $ScriptDir 'PowerProfileMedia.ps1')
 Initialize-ProfileLogging $ScriptDir 'tray'
 
 function Write-LifecycleLog {
@@ -1324,6 +1325,8 @@ Initialize-ProfileDistribution
 $Script:DisplayIsOff=$false
 $Script:DisplayRequest=$null
 $Script:DisplayRecovered=$false
+$Script:DisplayMediaLastActivity=[DateTime]::UtcNow
+$Script:DisplayMediaWasProtected=$false
 $Script:DisplayLastRefresh=[DateTime]::MinValue
 $Script:DisplayLastOff=[DateTime]::MinValue
 $Script:DisplayHeartbeat=[DateTime]::MinValue
@@ -1347,7 +1350,14 @@ $Script:DisplayTimer.Add_Tick({
             if(-not $ready){return}
             Write-ProfileEvent 'display.ready' '安全黑屏已启用；使用纯黑窗口，不发送硬件关屏命令' -Data $options
         }
-        $action=Get-DisplayAction $options.enabled (Get-UserActivityIdleSeconds) $options.idleMinutes $Script:DisplayIsOff
+        $media=if($options.enabled){Get-DisplayMediaProtection $ScriptDir}else{@{Protected=$false;Fresh=$true}}
+        if($media.Protected){$Script:DisplayMediaLastActivity=[DateTime]::UtcNow}
+        if($media.Protected -ne $Script:DisplayMediaWasProtected){
+            Write-ProfileEvent 'display.media.protection' '媒体播放保护状态变化；保护结束后重新计时' -Data @{protected=$media.Protected;fresh=$media.Fresh}
+            $Script:DisplayMediaWasProtected=$media.Protected
+        }
+        $displayIdle=Get-MediaAwareDisplayIdle (Get-UserActivityIdleSeconds) $media.Protected $Script:DisplayMediaLastActivity
+        $action=Get-DisplayAction $options.enabled $displayIdle $options.idleMinutes $Script:DisplayIsOff
         if($action -eq 'Wake'){
             # Input itself wakes Windows; also wake for XInput controllers and disabling.
             [PowerProfileDisplay]::ScreensOn()
@@ -1358,6 +1368,7 @@ $Script:DisplayTimer.Add_Tick({
             [void](Invoke-DisplayPowerLock {Restore-DisplayPower $ScriptDir -OverlayOnly})
         }
         if(-not $options.enabled){
+            Stop-DisplayMediaMonitor
             if($Script:DisplayRequest){
                 if(Invoke-DisplayPowerLock {Restore-DisplayPower $ScriptDir}){
                     $Script:DisplayRequest.Dispose();$Script:DisplayRequest=$null
@@ -1372,7 +1383,8 @@ $Script:DisplayTimer.Add_Tick({
             # Restore the older, more aggressive workstation overlay before blanking.
             if(-not (Invoke-DisplayPowerLock {Restore-WorkstationOverlay $ScriptDir '自动熄屏，保留后台性能'})){return}
             # Recheck input after any synchronous work to avoid blanking a returning user.
-            if((Get-UserActivityIdleSeconds) -lt $options.idleMinutes*60){return}
+            $latestMedia=Read-DisplayMediaState $ScriptDir $PID $Script:DisplayMediaWorker.Id
+            if((Get-MediaAwareDisplayIdle (Get-UserActivityIdleSeconds) $latestMedia.Protected $Script:DisplayMediaLastActivity) -lt $options.idleMinutes*60){return}
             [PowerProfileDisplay]::ScreensOff()
             $Script:DisplayIsOff=$true;$Script:DisplayLastOff=[DateTime]::UtcNow
             Write-ProfileEvent 'display.off' '输入空闲达到阈值，显示纯黑窗口；未请求硬件关屏或待机' -Data $options
@@ -1396,6 +1408,7 @@ $Script:DisplayTimer.Start()
 try {[System.Windows.Forms.Application]::Run()}
 finally {
     $Script:DisplayTimer.Stop();$Script:DisplayTimer.Dispose()
+    Stop-DisplayMediaMonitor
     $cleanupMutex=New-Object Threading.Mutex($false,'Global\PowerProfile_Worker');$cleanupLocked=$false
     try {
         try{$cleanupLocked=$cleanupMutex.WaitOne(10000)}catch [Threading.AbandonedMutexException]{$cleanupLocked=$true}

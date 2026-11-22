@@ -33,6 +33,7 @@ foreach ($f in @($WorkerPath, $TrayPath, $VbsPath, (Join-Path $ScriptDir 'PowerP
 Write-Host "[2/5] 脚本文件齐全" -ForegroundColor Green
 foreach($name in @('PowerProfileDisplay.ps1','PowerProfileDisplay.cs')){if(-not(Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 if(-not(Test-Path (Join-Path $ScriptDir 'PowerProfileGpuSample.ps1'))){throw 'Missing GPU sampler'}
+foreach($name in @('PowerProfileMedia.ps1','PowerProfileMedia.cs','PowerProfileMediaWorker.ps1')){if(-not(Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}}
 foreach($name in @('Start-PowerProfile.ps1','PowerProfileVersion.ps1','PowerProfileModernUI.ps1','PowerProfileUI.cs','Read-SystemStatus.ps1','PowerProfileLog.ps1','PowerProfileWorkstation.ps1','PowerProfileWorkstation.cs','workdays.2026.json','legacy\PowerProfileTray.ps1')) {
     if(-not (Test-Path (Join-Path $ScriptDir $name))){throw "Missing file: $name"}
 }

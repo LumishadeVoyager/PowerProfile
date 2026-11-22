@@ -54,6 +54,7 @@ function Test-ProfilePackage([string]$Directory,[string]$Version){
     if([version]$Version -ge [version]'1.2.0'){foreach($required in @('PowerProfileWorkspace.cs','PowerProfileWorkspace.ps1','PowerProfileWorkspaceData.ps1','PowerProfileWorkspaceCharts.cs','PowerProfileConnectionUI.ps1','PowerProfileConnectionProbe.py')){if(-not $names.ContainsKey($required)){throw "工作台更新包缺少：$required"}}}
     if([version]$Version -ge [version]'1.7.0' -and -not $names.ContainsKey('PowerProfileCards.cs')){throw '游戏 / 设备卡片组件缺失。'}
     if([version]$Version -ge [version]'1.10.2' -and -not $names.ContainsKey('PowerProfileGpuSample.ps1')){throw 'GPU 隔离采样组件缺失。'}
+    if([version]$Version -ge [version]'1.10.3'){foreach($required in @('PowerProfileMedia.ps1','PowerProfileMedia.cs','PowerProfileMediaWorker.ps1')){if(-not $names.ContainsKey($required)){throw '媒体播放保护组件缺失。'}}}
     if([version]$Version -ge [version]'1.10.0'){foreach($required in @('PowerProfileBand.ps1','PowerProfileBand.py')){if(-not $names.ContainsKey($required)){throw '手环同步组件缺失。'}}}
     if([version]$Version -ge [version]'1.6.0' -and -not $names.ContainsKey('PowerProfileSkin.cs')){throw '皮肤组件缺失。'}
     if([version]$Version -ge [version]'1.5.0'){foreach($required in @('PowerProfileAI.ps1','PowerProfileAIUsage.py')){if(-not $names.ContainsKey($required)){throw 'AI 组件缺失。'}}}

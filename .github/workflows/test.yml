@@ -16,7 +16,7 @@ jobs:
             if ($errors.Count) { throw ($errors | Out-String) }
           }
           # UI suites define callbacks and mock workers; isolate their process state.
-          foreach ($suite in @('Insights','Workspace','Distribution','Detection','UI','Settings','Energy','UsageLogs','DeviceHub','Workstation','Telemetry','LogViewer','FileIO','Game','Display','DisplayUI','Band')) {
+          foreach ($suite in @('Insights','Workspace','Distribution','Detection','UI','Settings','Energy','UsageLogs','DeviceHub','Workstation','Telemetry','LogViewer','FileIO','Game','Display','DisplayUI','Band','Media')) {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tests\PowerProfile$suite.Tests.ps1"
             if ($LASTEXITCODE -ne 0) { throw "Failed suite: $suite" }
           }
